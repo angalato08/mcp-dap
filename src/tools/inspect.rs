@@ -1,10 +1,14 @@
+use std::path::Path;
+
 use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
 use rmcp::schemars;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use tracing::warn;
 
 use super::DebugServer;
+use crate::context::source::extract_source_context;
 use crate::context::truncation::truncate_value;
 use crate::error::AppError;
 
@@ -69,11 +73,83 @@ impl DebugServer {
         &self,
         params: GetStackParams,
     ) -> Result<CallToolResult, McpError> {
-        // TODO: DAP stackTrace, read source files, format with context
-        let _ = params;
-        Ok(CallToolResult::success(vec![Content::text(
-            "debug_get_stack: not yet implemented",
-        )]))
+        let state = &self.state;
+        let timeout = state.config.dap_timeout_secs;
+        let context_lines = state.config.source_context_lines;
+
+        let thread_id = self
+            .resolve_thread_id(params.thread_id)
+            .await
+            .map_err(McpError::from)?;
+
+        let body = {
+            let guard = state.require_client().await.map_err(McpError::from)?;
+            let client = guard.as_ref().unwrap();
+            client
+                .send_request_with_timeout(
+                    "stackTrace",
+                    Some(serde_json::json!({
+                        "threadId": thread_id,
+                        "levels": params.max_frames,
+                    })),
+                    timeout,
+                )
+                .await
+                .map_err(McpError::from)?
+        };
+
+        let frames = body
+            .get("stackFrames")
+            .and_then(|f| f.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        if frames.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No stack frames available",
+            )]));
+        }
+
+        let mut output = String::new();
+        // Inject source context for the top 3 frames.
+        const SOURCE_INJECT_FRAMES: usize = 3;
+
+        for (i, frame) in frames.iter().enumerate() {
+            let name = frame
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("<unknown>");
+            let file = frame
+                .get("source")
+                .and_then(|s| s.get("path"))
+                .and_then(|p| p.as_str());
+            let line = frame.get("line").and_then(|l| l.as_i64());
+
+            // Format: #0 function_name at file:line
+            output.push_str(&format!("#{i} {name}"));
+            if let (Some(file), Some(line)) = (file, line) {
+                output.push_str(&format!(" at {file}:{line}"));
+            }
+            output.push('\n');
+
+            // Auto-inject source context for top frames.
+            if i < SOURCE_INJECT_FRAMES {
+                if let (Some(file), Some(line)) = (file, line) {
+                    let path = Path::new(file);
+                    match extract_source_context(path, line as usize, context_lines) {
+                        Ok(snippet) => {
+                            output.push_str(&snippet);
+                            output.push('\n');
+                        }
+                        Err(e) => {
+                            warn!(file, "failed to read source for context: {e}");
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
     /// Evaluate an expression or read a variable, with LLM context guard.
