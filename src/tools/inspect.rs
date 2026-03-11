@@ -5,6 +5,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::DebugServer;
+use crate::context::truncation::truncate_value;
+use crate::error::AppError;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetStackParams {
@@ -28,6 +30,40 @@ pub struct EvaluateParams {
 }
 
 impl DebugServer {
+    /// Resolve the top frame ID for evaluate context when none is provided.
+    async fn resolve_frame_id(&self, frame_id: Option<i64>) -> Result<i64, AppError> {
+        if let Some(id) = frame_id {
+            return Ok(id);
+        }
+
+        // Get the first thread, then its top stack frame.
+        let thread_id = self.resolve_thread_id(None).await?;
+        let timeout = self.state.config.dap_timeout_secs;
+
+        let guard = self.state.require_client().await?;
+        let client = guard.as_ref().unwrap();
+        let body = client
+            .send_request_with_timeout(
+                "stackTrace",
+                Some(serde_json::json!({
+                    "threadId": thread_id,
+                    "levels": 1,
+                })),
+                timeout,
+            )
+            .await?;
+
+        let frame_id = body
+            .get("stackFrames")
+            .and_then(|f| f.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|f| f.get("id"))
+            .and_then(|id| id.as_i64())
+            .ok_or_else(|| AppError::DapError("no stack frames available".into()))?;
+
+        Ok(frame_id)
+    }
+
     /// Get the current call stack with auto-injected source context.
     pub async fn handle_get_stack(
         &self,
@@ -45,10 +81,47 @@ impl DebugServer {
         &self,
         params: EvaluateParams,
     ) -> Result<CallToolResult, McpError> {
-        // TODO: DAP evaluate, pipe through truncation/summarization
-        let _ = params;
-        Ok(CallToolResult::success(vec![Content::text(
-            "debug_evaluate: not yet implemented",
-        )]))
+        let state = &self.state;
+        let timeout = state.config.dap_timeout_secs;
+
+        let frame_id = self
+            .resolve_frame_id(params.frame_id)
+            .await
+            .map_err(McpError::from)?;
+
+        let body = {
+            let guard = state.require_client().await.map_err(McpError::from)?;
+            let client = guard.as_ref().unwrap();
+            client
+                .send_request_with_timeout(
+                    "evaluate",
+                    Some(serde_json::json!({
+                        "expression": params.expression,
+                        "frameId": frame_id,
+                        "context": "repl",
+                    })),
+                    timeout,
+                )
+                .await
+                .map_err(McpError::from)?
+        };
+
+        let result_str = body
+            .get("result")
+            .and_then(|r| r.as_str())
+            .unwrap_or("<no result>");
+
+        let type_name = body
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown");
+
+        // Apply LLM context guard truncation.
+        let truncated = truncate_value(result_str, state.config.max_variable_length);
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} = {} (type: {type_name})",
+            params.expression, truncated,
+        ))]))
     }
 }

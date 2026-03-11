@@ -35,7 +35,7 @@ pub enum StepGranularity {
 
 impl DebugServer {
     /// Resolve a thread ID: use the provided one, or query the adapter for the first thread.
-    async fn resolve_thread_id(&self, thread_id: Option<i64>) -> Result<i64, AppError> {
+    pub(super) async fn resolve_thread_id(&self, thread_id: Option<i64>) -> Result<i64, AppError> {
         if let Some(id) = thread_id {
             return Ok(id);
         }
