@@ -1,4 +1,5 @@
 mod config;
+mod dap;
 mod error;
 
 fn main() {

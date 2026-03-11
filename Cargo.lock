@@ -344,7 +344,9 @@ name = "mcp-dap-rs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "dap-types",
+ "futures",
  "rmcp",
  "schemars 0.8.22",
  "serde",
