@@ -1,6 +1,8 @@
 /// DAP events re-broadcast to tool handlers via `tokio::sync::broadcast`.
 #[derive(Debug, Clone)]
 pub enum DapEvent {
+    /// Adapter has finished initializing and is ready for configuration.
+    Initialized,
     Stopped {
         thread_id: i64,
         reason: String,

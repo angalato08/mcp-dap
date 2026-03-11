@@ -66,6 +66,7 @@ pub async fn run_event_loop(
                     "exited" => Some(DapEvent::Exited {
                         exit_code: body.get("exitCode").and_then(|c| c.as_i64()).unwrap_or(-1),
                     }),
+                    "initialized" => Some(DapEvent::Initialized),
                     "terminated" => Some(DapEvent::Terminated),
                     "output" => Some(DapEvent::Output {
                         category: body

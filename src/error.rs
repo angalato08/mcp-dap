@@ -1,5 +1,7 @@
 use std::io;
 
+use rmcp::ErrorData as McpError;
+
 /// Central error type for the mcp-dap-rs application.
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -32,4 +34,15 @@ pub enum AppError {
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+impl From<AppError> for McpError {
+    fn from(err: AppError) -> Self {
+        match &err {
+            AppError::NoSession | AppError::SessionActive | AppError::InvalidState { .. } => {
+                McpError::invalid_params(err.to_string(), None)
+            }
+            _ => McpError::internal_error(err.to_string(), None),
+        }
+    }
 }
