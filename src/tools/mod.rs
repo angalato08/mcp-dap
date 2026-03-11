@@ -1,7 +1,7 @@
-mod breakpoint;
-mod execution;
-mod inspect;
-mod launch;
+pub mod breakpoint;
+pub mod execution;
+pub mod inspect;
+pub mod launch;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
