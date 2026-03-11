@@ -83,6 +83,11 @@ impl DebugServer {
     ) -> Result<CallToolResult, McpError> {
         self.handle_evaluate(params.0).await
     }
+
+    #[tool(name = "debug_disconnect", description = "End the debug session, terminate the debuggee, and clean up")]
+    async fn debug_disconnect(&self) -> Result<CallToolResult, McpError> {
+        self.handle_disconnect().await
+    }
 }
 
 #[tool_handler]
