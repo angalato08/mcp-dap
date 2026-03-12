@@ -5,7 +5,7 @@ pub mod launch;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::state::AppState;
@@ -52,6 +52,14 @@ impl DebugServer {
         self.handle_set_breakpoint(params.0).await
     }
 
+    #[tool(name = "debug_remove_breakpoint", description = "Remove a breakpoint at a file and line")]
+    async fn debug_remove_breakpoint(
+        &self,
+        params: Parameters<breakpoint::RemoveBreakpointParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.handle_remove_breakpoint(params.0).await
+    }
+
     #[tool(name = "debug_continue", description = "Resume execution until the next breakpoint or process exit")]
     async fn debug_continue(
         &self,
@@ -84,6 +92,22 @@ impl DebugServer {
         self.handle_evaluate(params.0).await
     }
 
+    #[tool(name = "debug_pause", description = "Pause execution of one or all threads")]
+    async fn debug_pause(
+        &self,
+        params: Parameters<execution::PauseParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.handle_pause(params.0).await
+    }
+
+    #[tool(name = "debug_threads", description = "List all threads in the debuggee")]
+    async fn debug_threads(
+        &self,
+        _params: Parameters<execution::ThreadsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.handle_threads().await
+    }
+
     #[tool(name = "debug_disconnect", description = "End the debug session, terminate the debuggee, and clean up")]
     async fn debug_disconnect(&self) -> Result<CallToolResult, McpError> {
         self.handle_disconnect().await
@@ -91,4 +115,8 @@ impl DebugServer {
 }
 
 #[tool_handler]
-impl ServerHandler for DebugServer {}
+impl ServerHandler for DebugServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    }
+}

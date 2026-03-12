@@ -20,6 +20,9 @@ pub enum AppError {
     #[error("invalid session state transition: {from} → {to}")]
     InvalidState { from: String, to: String },
 
+    #[error("adapter not allowed: {0} (allowed: {1})")]
+    UnauthorizedAdapter(String, String),
+
     #[error("failed to spawn debug adapter: {0}")]
     SpawnFailed(#[source] io::Error),
 
@@ -39,7 +42,10 @@ pub enum AppError {
 impl From<AppError> for McpError {
     fn from(err: AppError) -> Self {
         match &err {
-            AppError::NoSession | AppError::SessionActive | AppError::InvalidState { .. } => {
+            AppError::NoSession
+            | AppError::SessionActive
+            | AppError::InvalidState { .. }
+            | AppError::UnauthorizedAdapter(..) => {
                 McpError::invalid_params(err.to_string(), None)
             }
             _ => McpError::internal_error(err.to_string(), None),

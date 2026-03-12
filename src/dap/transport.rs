@@ -1,7 +1,10 @@
 use std::process::Stdio;
+use std::time::Duration;
 
+use tokio::net::TcpStream;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
+use crate::dap::client::DapClient;
 use crate::error::AppError;
 
 /// Spawned adapter handle with access to its stdio streams.
@@ -29,4 +32,50 @@ pub fn spawn_adapter(path: &str, args: &[String]) -> Result<AdapterProcess, AppE
         stdout,
         child,
     })
+}
+
+/// Spawn a TCP-based debug adapter (e.g. delve) and connect to it.
+///
+/// Launches the adapter with `-l 127.0.0.1:{port}` and connects via TCP.
+/// Returns a `DapClient` using the TCP stream for DAP communication.
+pub async fn spawn_tcp_adapter(
+    path: &str,
+    args: &[String],
+    port: u16,
+) -> Result<DapClient, AppError> {
+    let addr = format!("127.0.0.1:{port}");
+
+    let mut full_args = args.to_vec();
+    full_args.extend_from_slice(&["-l".into(), addr.clone()]);
+
+    let child = Command::new(path)
+        .args(&full_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(AppError::SpawnFailed)?;
+
+    // Wait for the adapter to start listening.
+    let stream = retry_connect(&addr, 20, Duration::from_millis(200)).await?;
+    let (read_half, write_half) = stream.into_split();
+
+    Ok(DapClient::from_stream(read_half, write_half, child))
+}
+
+/// Retry TCP connection with backoff.
+async fn retry_connect(
+    addr: &str,
+    max_attempts: u32,
+    delay: Duration,
+) -> Result<TcpStream, AppError> {
+    for _ in 0..max_attempts {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => return Ok(stream),
+            Err(_) => tokio::time::sleep(delay).await,
+        }
+    }
+    Err(AppError::DapError(format!(
+        "failed to connect to adapter at {addr} after {max_attempts} attempts"
+    )))
 }

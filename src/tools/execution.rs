@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::time::Duration;
 
 use rmcp::ErrorData as McpError;
@@ -7,6 +8,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::DebugServer;
+use crate::context::sanitize::sanitize_debuggee_output;
 use crate::dap::state_machine::SessionPhase;
 use crate::dap::types::DapEvent;
 use crate::error::AppError;
@@ -15,6 +17,9 @@ use crate::error::AppError;
 pub struct ContinueParams {
     /// Thread ID to continue. Uses first available thread if omitted.
     pub thread_id: Option<i64>,
+    /// If true, only resume this thread; other threads stay paused.
+    #[serde(default)]
+    pub single_thread: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -23,6 +28,9 @@ pub struct StepParams {
     pub granularity: StepGranularity,
     /// Thread ID to step. Uses first available thread if omitted.
     pub thread_id: Option<i64>,
+    /// If true, only step this thread; other threads stay paused.
+    #[serde(default)]
+    pub single_thread: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -32,6 +40,15 @@ pub enum StepGranularity {
     Out,
     Over,
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PauseParams {
+    /// Thread ID to pause. If omitted, pauses all threads.
+    pub thread_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ThreadsParams {}
 
 impl DebugServer {
     /// Resolve a thread ID: use the provided one, or query the adapter for the first thread.
@@ -49,10 +66,10 @@ impl DebugServer {
 
         let thread_id = body
             .get("threads")
-            .and_then(|t| t.as_array())
+            .and_then(serde_json::Value::as_array)
             .and_then(|arr| arr.first())
             .and_then(|t| t.get("id"))
-            .and_then(|id| id.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .ok_or_else(|| AppError::DapError("no threads available".into()))?;
 
         Ok(thread_id)
@@ -64,6 +81,10 @@ impl DebugServer {
         params: ContinueParams,
     ) -> Result<CallToolResult, McpError> {
         let state = &self.state;
+        state
+            .require_phase(&[SessionPhase::Stopped])
+            .await
+            .map_err(McpError::from)?;
 
         // Resolve thread before sending continue.
         let thread_id = self
@@ -77,14 +98,15 @@ impl DebugServer {
 
         // Send DAP continue.
         {
+            let mut args = serde_json::json!({ "threadId": thread_id });
+            if params.single_thread {
+                args["singleThread"] = serde_json::json!(true);
+            }
+
             let guard = state.require_client().await.map_err(McpError::from)?;
             let client = guard.as_ref().unwrap();
             client
-                .send_request_with_timeout(
-                    "continue",
-                    Some(serde_json::json!({ "threadId": thread_id })),
-                    timeout,
-                )
+                .send_request_with_timeout("continue", Some(args), timeout)
                 .await
                 .map_err(McpError::from)?;
         }
@@ -106,9 +128,9 @@ impl DebugServer {
                         | DapEvent::Terminated
                         | DapEvent::Exited { .. }),
                     ) => return Ok(ev),
-                    Ok(_) => continue,
+                    Ok(_) => {}
                     Err(e) => {
-                        return Err(AppError::DapError(format!("event channel error: {e}")))
+                        return Err(AppError::DapError(format!("event channel error: {e}")));
                     }
                 }
             }
@@ -119,15 +141,24 @@ impl DebugServer {
 
         // Update session state and build response.
         match &event {
-            DapEvent::Stopped { thread_id, reason } => {
+            DapEvent::Stopped {
+                thread_id,
+                reason,
+                all_threads_stopped,
+            } => {
                 state
                     .session
                     .lock()
                     .await
                     .transition(SessionPhase::Stopped)
                     .map_err(McpError::from)?;
+                let scope = if *all_threads_stopped {
+                    ", all threads stopped"
+                } else {
+                    ""
+                };
                 Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Stopped: {reason} (thread {thread_id})"
+                    "Stopped: {reason} (thread {thread_id}{scope})"
                 ))]))
             }
             DapEvent::Exited { exit_code } => {
@@ -159,6 +190,10 @@ impl DebugServer {
     /// Step in, out, or over the current line.
     pub async fn handle_step(&self, params: StepParams) -> Result<CallToolResult, McpError> {
         let state = &self.state;
+        state
+            .require_phase(&[SessionPhase::Stopped])
+            .await
+            .map_err(McpError::from)?;
 
         let thread_id = self
             .resolve_thread_id(params.thread_id)
@@ -178,14 +213,15 @@ impl DebugServer {
 
         // Send DAP step request.
         {
+            let mut args = serde_json::json!({ "threadId": thread_id });
+            if params.single_thread {
+                args["singleThread"] = serde_json::json!(true);
+            }
+
             let guard = state.require_client().await.map_err(McpError::from)?;
             let client = guard.as_ref().unwrap();
             client
-                .send_request_with_timeout(
-                    command,
-                    Some(serde_json::json!({ "threadId": thread_id })),
-                    timeout,
-                )
+                .send_request_with_timeout(command, Some(args), timeout)
                 .await
                 .map_err(McpError::from)?;
         }
@@ -207,9 +243,9 @@ impl DebugServer {
                         | DapEvent::Terminated
                         | DapEvent::Exited { .. }),
                     ) => return Ok(ev),
-                    Ok(_) => continue,
+                    Ok(_) => {}
                     Err(e) => {
-                        return Err(AppError::DapError(format!("event channel error: {e}")))
+                        return Err(AppError::DapError(format!("event channel error: {e}")));
                     }
                 }
             }
@@ -219,15 +255,24 @@ impl DebugServer {
         .map_err(McpError::from)?;
 
         match &event {
-            DapEvent::Stopped { thread_id, reason } => {
+            DapEvent::Stopped {
+                thread_id,
+                reason,
+                all_threads_stopped,
+            } => {
                 state
                     .session
                     .lock()
                     .await
                     .transition(SessionPhase::Stopped)
                     .map_err(McpError::from)?;
+                let scope = if *all_threads_stopped {
+                    ", all threads stopped"
+                } else {
+                    ""
+                };
                 Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Stepped ({command}): {reason} (thread {thread_id})"
+                    "Stepped ({command}): {reason} (thread {thread_id}{scope})"
                 ))]))
             }
             DapEvent::Exited { exit_code } => {
@@ -254,5 +299,122 @@ impl DebugServer {
             }
             _ => unreachable!(),
         }
+    }
+
+    /// Pause one or all threads.
+    pub async fn handle_pause(&self, params: PauseParams) -> Result<CallToolResult, McpError> {
+        let state = &self.state;
+        state
+            .require_phase(&[SessionPhase::Running])
+            .await
+            .map_err(McpError::from)?;
+        let timeout = state.config.dap_timeout_secs;
+
+        let thread_id = self
+            .resolve_thread_id(params.thread_id)
+            .await
+            .map_err(McpError::from)?;
+
+        {
+            let guard = state.require_client().await.map_err(McpError::from)?;
+            let client = guard.as_ref().unwrap();
+            client
+                .send_request_with_timeout(
+                    "pause",
+                    Some(serde_json::json!({ "threadId": thread_id })),
+                    timeout,
+                )
+                .await
+                .map_err(McpError::from)?;
+        }
+
+        // Wait for the stopped event confirming the pause.
+        let mut event_rx = state.event_tx.subscribe();
+        let event = tokio::time::timeout(Duration::from_secs(timeout), async {
+            loop {
+                match event_rx.recv().await {
+                    Ok(ev @ DapEvent::Stopped { .. }) => return Ok(ev),
+                    Ok(DapEvent::Terminated | DapEvent::AdapterCrashed) => {
+                        return Err(AppError::DapError("session ended during pause".into()));
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        return Err(AppError::DapError(format!("event channel error: {e}")));
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
+        .map_err(McpError::from)?;
+
+        if let DapEvent::Stopped {
+            thread_id,
+            all_threads_stopped,
+            ..
+        } = &event
+        {
+            // Transition Running -> Stopped.
+            let _ = state
+                .session
+                .lock()
+                .await
+                .transition(SessionPhase::Stopped);
+            let scope = if *all_threads_stopped {
+                "all threads paused"
+            } else {
+                &format!("thread {thread_id} paused")
+            };
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "Paused: {scope}"
+            ))]))
+        } else {
+            unreachable!()
+        }
+    }
+
+    /// List all threads in the debuggee.
+    pub async fn handle_threads(&self) -> Result<CallToolResult, McpError> {
+        let state = &self.state;
+        state
+            .require_phase(&[SessionPhase::Running, SessionPhase::Stopped])
+            .await
+            .map_err(McpError::from)?;
+        let timeout = state.config.dap_timeout_secs;
+
+        let body = {
+            let guard = state.require_client().await.map_err(McpError::from)?;
+            let client = guard.as_ref().unwrap();
+            client
+                .send_request_with_timeout("threads", None, timeout)
+                .await
+                .map_err(McpError::from)?
+        };
+
+        let threads = body
+            .get("threads")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        if threads.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No threads available",
+            )]));
+        }
+
+        let mut output = String::new();
+        for t in &threads {
+            let id = t.get("id").and_then(serde_json::Value::as_i64).unwrap_or(-1);
+            let name = sanitize_debuggee_output(
+                t.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unnamed"),
+            );
+            let _ = writeln!(output, "Thread {id}: {name}");
+        }
+        let _ = write!(output, "\n{} thread(s) total", threads.len());
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 }

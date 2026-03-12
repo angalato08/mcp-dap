@@ -1,12 +1,12 @@
 # TODO
 
-## Phase 1: Validation
+## Phase 1: Validation ✓
 
-- [ ] Install `debugpy` (`pip install debugpy`) and run `cargo test -- --ignored` to validate the full flow
-- [ ] Test with `codelldb` adapter (Rust/C++ debugging)
-- [ ] Test with `delve` adapter (Go debugging)
-- [ ] Error recovery: clean up session state when adapter crashes mid-session
-- [ ] Handle launch failure cleanup (kill child, reset state if spawn/initialize/launch fails partway)
+- [x] Install `debugpy` (`pip install debugpy`) and run `cargo test -- --ignored` to validate the full flow
+- [x] Test with `codelldb` adapter (Rust/C++ debugging)
+- [x] Test with `delve` adapter (Go debugging) — added TCP transport support
+- [x] Error recovery: clean up session state when adapter crashes mid-session
+- [x] Handle launch failure cleanup (kill child, reset state if spawn/initialize/launch fails partway)
 
 ## Phase 2: AI Optimizations
 

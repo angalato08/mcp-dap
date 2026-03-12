@@ -6,6 +6,7 @@ pub enum DapEvent {
     Stopped {
         thread_id: i64,
         reason: String,
+        all_threads_stopped: bool,
     },
     Continued {
         thread_id: i64,
@@ -18,4 +19,8 @@ pub enum DapEvent {
         category: Option<String>,
         output: String,
     },
+    /// Adapter capabilities changed mid-session.
+    Capabilities(serde_json::Value),
+    /// Adapter process exited unexpectedly (event loop stream ended).
+    AdapterCrashed,
 }

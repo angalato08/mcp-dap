@@ -104,16 +104,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "dap-types"
-version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ac6ec62ed0beeca294d83389461ba6a2ff29e9f531cbacb9d98c4ffedac9339"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -345,8 +335,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
- "dap-types",
  "futures",
+ "memchr",
  "rmcp",
  "schemars 0.8.22",
  "serde",

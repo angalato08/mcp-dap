@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 rmcp = { version = "1.2", features = ["server", "transport-io", "macros"] }
-dap-types = "0.0.1"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 bytes = "1"
@@ -17,3 +16,8 @@ thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+memchr = "2"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
