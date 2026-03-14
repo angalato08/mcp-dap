@@ -22,6 +22,12 @@ pub struct Config {
     /// Maximum nesting depth for variable/object expansion before truncation.
     pub max_nesting_depth: usize,
 
+    /// Maximum number of cached pagination entries for large debug results.
+    pub pagination_cache_max_entries: usize,
+
+    /// Time-to-live in seconds for pagination cache entries.
+    pub pagination_cache_ttl_secs: u64,
+
     /// Allowed debug adapter basenames (e.g. "codelldb", "debugpy").
     /// Empty list disables the whitelist (allows all adapters).
     pub allowed_adapters: Vec<String>,
@@ -36,6 +42,8 @@ impl Default for Config {
             max_array_items: 10,
             max_object_keys: 10,
             max_nesting_depth: 3,
+            pagination_cache_max_entries: 50,
+            pagination_cache_ttl_secs: 300,
             allowed_adapters: vec![
                 "codelldb".into(),
                 "debugpy".into(),

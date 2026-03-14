@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard, broadcast};
 
 use crate::config::Config;
+use crate::context::pagination::PaginationCache;
 use crate::dap::client::DapClient;
 use crate::dap::state_machine::{SessionPhase, SessionState};
 use crate::dap::types::DapEvent;
@@ -21,11 +22,17 @@ pub struct AppState {
     pub breakpoints: Arc<Mutex<HashMap<String, Vec<TrackedBreakpoint>>>>,
     /// Adapter capabilities from the last `initialize` response.
     pub capabilities: Arc<Mutex<Option<serde_json::Value>>>,
+    /// Cache for paginating large debug evaluation results.
+    pub pagination_cache: Arc<Mutex<PaginationCache>>,
 }
 
 impl AppState {
     pub fn new(config: Config) -> Self {
         let (event_tx, _) = broadcast::channel(64);
+        let pagination_cache = PaginationCache::new(
+            config.pagination_cache_max_entries,
+            config.pagination_cache_ttl_secs,
+        );
         Self {
             config: Arc::new(config),
             dap_client: Arc::new(Mutex::new(None)),
@@ -33,6 +40,7 @@ impl AppState {
             event_tx,
             breakpoints: Arc::new(Mutex::new(HashMap::new())),
             capabilities: Arc::new(Mutex::new(None)),
+            pagination_cache: Arc::new(Mutex::new(pagination_cache)),
         }
     }
 
@@ -136,6 +144,9 @@ impl AppState {
         self.breakpoints.lock().await.clear();
         // Clear cached capabilities.
         *self.capabilities.lock().await = None;
+        // NOTE: pagination cache is intentionally NOT cleared here.
+        // Tokens remain valid (with their own TTL) even after the debug session ends,
+        // so the agent can still page through previously fetched results.
     }
 }
 

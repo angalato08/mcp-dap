@@ -108,6 +108,14 @@ impl DebugServer {
         self.handle_threads().await
     }
 
+    #[tool(name = "debug_get_page", description = "Fetch the next page of a truncated debug result using a pagination token")]
+    async fn debug_get_page(
+        &self,
+        params: Parameters<inspect::GetPageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.handle_get_page(params.0).await
+    }
+
     #[tool(name = "debug_disconnect", description = "End the debug session, terminate the debuggee, and clean up")]
     async fn debug_disconnect(&self) -> Result<CallToolResult, McpError> {
         self.handle_disconnect().await

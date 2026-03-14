@@ -10,11 +10,13 @@
 
 ## Phase 2: AI Optimizations
 
-- [ ] Wire `summarize_array()` / `summarize_object()` into `debug_evaluate` for structured variable responses
-- [ ] Add pagination support to truncated results (pagination token for large arrays/objects)
-- [ ] Auto-context injection in stopped events (broadcast source snippets with breakpoint hits)
-- [ ] Thread-aware execution: expose thread list, support multi-thread debugging
-- [ ] Enrich `debug_get_stack` with local variables per frame
+- [x] Wire `summarize_array()` / `summarize_object()` into `debug_evaluate` for structured variable responses
+- [x] Depth-limited truncation (`truncate_nested`) for deeply nested structures
+- [x] Thread-aware execution: expose thread list, support multi-thread debugging
+- [x] LLM prompt injection sanitizer (`sanitize_debuggee_output`) for untrusted debuggee output
+- [ ] Pagination for truncated results — when large arrays/objects are summarized (e.g. showing 10 of 10,000 items), provide a pagination token so the agent can request the next page without re-evaluating
+- [ ] Auto-context in stopped events — when a breakpoint hits, proactively attach source snippets to the `DapEvent::Stopped` broadcast so the LLM sees where it stopped without a follow-up `debug_get_stack` call
+- [ ] Local variables per stack frame — enrich `debug_get_stack` to include scopes and local variables for each frame, giving the LLM full context in one call instead of requiring follow-up `debug_evaluate` calls
 
 ## Phase 3: Distribution & Zero-Config
 
@@ -25,8 +27,16 @@
 
 ## Technical Debt
 
+- [x] Add unit tests for `DapCodec` (Content-Length framing edge cases)
+- [x] Add unit tests for `SessionState` transitions
+- [x] Add unit tests for context truncation/source extraction
+- [x] Add `debug_remove_breakpoint` tool
+- [x] Deadlock-safe `force_cleanup` (extract child handle before kill/wait)
+- [x] Session phase guards on all tool handlers
+- [x] Lower `MAX_DAP_MESSAGE_SIZE` to 1 MB + `MAX_HEADER_SIZE` (8 KB) guard
+- [x] `memchr` optimization for codec header search
+- [x] Event subscription race fix (subscribe before spawn)
+- [x] DAP `CapabilitiesEvent` handling + capabilities storage
+- [x] Structured tracing spans (`#[instrument]`)
+- [x] Clippy pedantic compliance (`[lints.clippy]` in Cargo.toml)
 - [ ] Replace raw `serde_json::Value` DAP requests with typed `dap-types` structs
-- [ ] Add unit tests for `DapCodec` (Content-Length framing edge cases)
-- [ ] Add unit tests for `SessionState` transitions
-- [ ] Add unit tests for context truncation/source extraction
-- [ ] Add `debug_remove_breakpoint` tool (currently can only add, not remove)

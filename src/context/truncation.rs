@@ -214,4 +214,5 @@ mod tests {
         let result = truncate_nested(&obj, 0);
         assert!(result.as_str().unwrap().contains("Object with 1 keys"));
     }
+
 }

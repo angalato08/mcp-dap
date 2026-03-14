@@ -14,11 +14,12 @@ const SOURCE_INJECT_FRAMES: usize = 3;
 use super::DebugServer;
 use crate::context::sanitize::sanitize_debuggee_output;
 use crate::context::source::extract_source_context;
-use crate::context::truncation::{
-    summarize_array, summarize_object, truncate_nested, truncate_value,
-};
+use crate::context::pagination::CacheEntry;
+use crate::context::truncation::{truncate_nested, truncate_value};
 use crate::dap::state_machine::SessionPhase;
 use crate::error::AppError;
+
+use std::time::SystemTime;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetStackParams {
@@ -39,6 +40,117 @@ pub struct EvaluateParams {
     pub expression: String,
     /// Frame ID for evaluation context. Uses top frame if omitted.
     pub frame_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetPageParams {
+    /// Pagination token from a previous truncated result.
+    pub token: String,
+    /// 0-based offset into the collection. Defaults to the next page after the initial result.
+    #[serde(default)]
+    pub offset: Option<usize>,
+    /// Maximum items to return. Defaults to config `max_array_items` / `max_object_keys`.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Pagination metadata for compact output formatting.
+struct PaginationMeta<'a> {
+    token: &'a str,
+    total: usize,
+    offset: usize,
+    end: usize,
+}
+
+/// Format a compound JSON value (from `fetch_children_raw`) as compact text lines.
+///
+/// Arrays:  `[i] value (type)` per line
+/// Objects: `key: value (type)` per line
+fn format_compact(
+    value: &serde_json::Value,
+    is_array: bool,
+    expression: &str,
+    type_name: &str,
+    pagination: Option<&PaginationMeta<'_>>,
+) -> String {
+    let mut out = String::new();
+
+    // --- header line ---
+    let _ = write!(out, "{expression} (");
+    if is_array {
+        let total = pagination.map_or_else(
+            || value.as_array().map_or(0, Vec::len),
+            |p| p.total,
+        );
+        let _ = write!(out, "{type_name}, {total} items");
+        if let Some(p) = pagination {
+            let _ = write!(out, ", showing {}..{}", p.offset, p.end);
+        }
+    } else {
+        let total = pagination.map_or_else(
+            || value.as_object().map_or(0, serde_json::Map::len),
+            |p| p.total,
+        );
+        let _ = write!(out, "{type_name}, {total} keys");
+        if let Some(p) = pagination {
+            let _ = write!(out, ", showing {}..{}", p.offset, p.end);
+        }
+    }
+    out.push(')');
+    if let Some(p) = pagination {
+        let _ = write!(out, " [page: {}]", p.token);
+    }
+    out.push('\n');
+
+    // --- body lines ---
+    if is_array {
+        let items = value.as_array().map_or(&[][..], Vec::as_slice);
+        let index_base = pagination.map_or(0, |p| p.offset);
+        for (i, item) in items.iter().enumerate() {
+            format_entry_line(&mut out, is_array, &(index_base + i).to_string(), item);
+        }
+    } else {
+        let obj = value.as_object();
+        if let Some(map) = obj {
+            for (key, val) in map {
+                if key.starts_with('_') && matches!(key.as_str(), "_summary" | "_pagination") {
+                    continue;
+                }
+                format_entry_line(&mut out, is_array, key, val);
+            }
+        }
+    }
+
+    out
+}
+
+/// Format a single child entry line.
+///
+/// For `{"value": "...", "type": "..."}` objects (from `fetch_children_raw`),
+/// extracts value/type. For depth-truncated strings, renders inline.
+fn format_entry_line(out: &mut String, is_array: bool, key: &str, val: &serde_json::Value) {
+    if is_array {
+        let _ = write!(out, "[{key}] ");
+    } else {
+        let _ = write!(out, "{key}: ");
+    }
+
+    // Values from fetch_children_raw are {"value": "...", "type": "..."}.
+    // After truncate_nested they might be replaced with a plain string.
+    if let Some(obj) = val.as_object() {
+        let v = obj.get("value").and_then(serde_json::Value::as_str).unwrap_or("");
+        let t = obj.get("type").and_then(serde_json::Value::as_str).unwrap_or("");
+        if t.is_empty() {
+            let _ = writeln!(out, "{v}");
+        } else {
+            let _ = writeln!(out, "{v} ({t})");
+        }
+    } else if let Some(s) = val.as_str() {
+        // Depth-truncated summary string
+        let _ = writeln!(out, "{s}");
+    } else {
+        let _ = writeln!(out, "{val}");
+    }
 }
 
 impl DebugServer {
@@ -76,14 +188,15 @@ impl DebugServer {
         Ok(frame_id)
     }
 
-    /// Fetch child variables and build a structured JSON summary.
+    /// Fetch child variables and build a full (non-truncated) JSON value.
     /// Returns `None` for scalar values (`variablesReference` <= 0).
-    async fn fetch_children_structured(
+    /// The bool indicates whether the result is array-like (true) or object-like (false).
+    async fn fetch_children_raw(
         &self,
         variables_ref: i64,
         indexed_variables: Option<i64>,
         named_variables: Option<i64>,
-    ) -> Result<Option<serde_json::Value>, AppError> {
+    ) -> Result<Option<(serde_json::Value, bool)>, AppError> {
         if variables_ref <= 0 {
             return Ok(None);
         }
@@ -104,11 +217,20 @@ impl DebugServer {
                 .await?
         };
 
-        let children = body
+        let children: Vec<serde_json::Value> = body
             .get("variables")
             .and_then(serde_json::Value::as_array)
             .cloned()
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| {
+                let name = c.get("name").and_then(serde_json::Value::as_str).unwrap_or("");
+                // Filter out debugpy internal metadata children.
+                !matches!(name, "special variables" | "function variables")
+                    && name != "len()"
+                    && !(name.starts_with("__") && name.ends_with("__"))
+            })
+            .collect();
 
         if children.is_empty() {
             return Ok(None);
@@ -128,28 +250,26 @@ impl DebugServer {
             }
         };
 
-        let max_depth = state.config.max_nesting_depth;
-
         if is_array {
             let arr: Vec<serde_json::Value> = children
                 .iter()
                 .map(|c| {
                     let val = sanitize_debuggee_output(
-                        c.get("value").and_then(serde_json::Value::as_str).unwrap_or(""),
+                        c.get("value")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(""),
                     );
-                    let typ = c.get("type").and_then(serde_json::Value::as_str).unwrap_or("");
+                    let typ = c
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
                     serde_json::json!({
                         "value": truncate_value(&val, max_var_len),
                         "type": typ,
                     })
                 })
                 .collect();
-            let summarized = summarize_array(
-                &serde_json::Value::Array(arr),
-                state.config.max_array_items,
-            );
-            let summarized = truncate_nested(&summarized, max_depth);
-            Ok(Some(summarized))
+            Ok(Some((serde_json::Value::Array(arr), true)))
         } else {
             let mut obj = serde_json::Map::new();
             for c in &children {
@@ -159,9 +279,14 @@ impl DebugServer {
                         .unwrap_or("?"),
                 );
                 let val = sanitize_debuggee_output(
-                    c.get("value").and_then(serde_json::Value::as_str).unwrap_or(""),
+                    c.get("value")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(""),
                 );
-                let typ = c.get("type").and_then(serde_json::Value::as_str).unwrap_or("");
+                let typ = c
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
                 obj.insert(
                     name,
                     serde_json::json!({
@@ -170,12 +295,7 @@ impl DebugServer {
                     }),
                 );
             }
-            let summarized = summarize_object(
-                &serde_json::Value::Object(obj),
-                state.config.max_object_keys,
-            );
-            let summarized = truncate_nested(&summarized, max_depth);
-            Ok(Some(summarized))
+            Ok(Some((serde_json::Value::Object(obj), false)))
         }
     }
 
@@ -266,6 +386,52 @@ impl DebugServer {
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
+    /// Summarize a raw compound value, caching for pagination if it exceeds limits.
+    /// Returns `(sliced_value, is_array, Option<(token, total)>)`.
+    async fn summarize_with_pagination(
+        &self,
+        raw_value: serde_json::Value,
+        is_array: bool,
+        expression: &str,
+        type_name: &str,
+    ) -> (serde_json::Value, Option<(String, usize)>) {
+        let state = &self.state;
+        let (exceeds_limit, total_count, limit) = if is_array {
+            let len = raw_value.as_array().map_or(0, Vec::len);
+            (len > state.config.max_array_items, len, state.config.max_array_items)
+        } else {
+            let len = raw_value.as_object().map_or(0, serde_json::Map::len);
+            (len > state.config.max_object_keys, len, state.config.max_object_keys)
+        };
+
+        if !exceeds_limit {
+            return (raw_value, None);
+        }
+
+        let entry = CacheEntry {
+            value: raw_value.clone(),
+            expression: expression.to_string(),
+            type_name: type_name.to_string(),
+            total_count,
+            is_array,
+            created_at: SystemTime::now(),
+        };
+        let token = state.pagination_cache.lock().await.insert(entry);
+
+        // Slice to first page.
+        let sliced = if is_array {
+            let arr = raw_value.as_array().unwrap();
+            serde_json::Value::Array(arr.iter().take(limit).cloned().collect())
+        } else {
+            let obj = raw_value.as_object().unwrap();
+            let map: serde_json::Map<String, serde_json::Value> =
+                obj.iter().take(limit).map(|(k, v)| (k.clone(), v.clone())).collect();
+            serde_json::Value::Object(map)
+        };
+
+        (sliced, Some((token, total_count)))
+    }
+
     /// Evaluate an expression or read a variable, with LLM context guard.
     pub async fn handle_evaluate(
         &self,
@@ -322,16 +488,36 @@ impl DebugServer {
             let named = body.get("namedVariables").and_then(serde_json::Value::as_i64);
 
             match self
-                .fetch_children_structured(variables_ref, indexed, named)
+                .fetch_children_raw(variables_ref, indexed, named)
                 .await
             {
-                Ok(Some(structured)) => {
-                    let pretty = serde_json::to_string_pretty(&structured)
-                        .unwrap_or_else(|_| structured.to_string());
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
-                        "{} (type: {type_name})\n{pretty}",
-                        params.expression,
-                    ))]));
+                Ok(Some((raw_value, is_array))) => {
+                    let (sliced, pag_info) = self
+                        .summarize_with_pagination(
+                            raw_value,
+                            is_array,
+                            &params.expression,
+                            type_name,
+                        )
+                        .await;
+                    let sliced =
+                        truncate_nested(&sliced, state.config.max_nesting_depth);
+                    let pagination = pag_info.as_ref().map(|(token, total)| {
+                        let end = sliced
+                            .as_array()
+                            .map(Vec::len)
+                            .or_else(|| sliced.as_object().map(serde_json::Map::len))
+                            .unwrap_or(0);
+                        PaginationMeta { token, total: *total, offset: 0, end }
+                    });
+                    let compact = format_compact(
+                        &sliced,
+                        is_array,
+                        &params.expression,
+                        type_name,
+                        pagination.as_ref(),
+                    );
+                    return Ok(CallToolResult::success(vec![Content::text(compact)]));
                 }
                 Ok(None) => {} // No children, fall through to scalar path.
                 Err(e) => {
@@ -347,5 +533,63 @@ impl DebugServer {
             "{} = {} (type: {type_name})",
             params.expression, truncated,
         ))]))
+    }
+
+    /// Fetch a page of a previously truncated debug result using a pagination token.
+    pub async fn handle_get_page(
+        &self,
+        params: GetPageParams,
+    ) -> Result<CallToolResult, McpError> {
+        let state = &self.state;
+        let max_depth = state.config.max_nesting_depth;
+
+        let mut cache = state.pagination_cache.lock().await;
+        let entry = cache
+            .get(&params.token)
+            .ok_or_else(|| McpError::from(AppError::PaginationTokenNotFound(params.token.clone())))?;
+
+        let expression = entry.expression.clone();
+        let type_name = entry.type_name.clone();
+        let total_count = entry.total_count;
+        let is_array = entry.is_array;
+        let value = entry.value.clone();
+        drop(cache);
+
+        let (sliced, offset, end) = if is_array {
+            let arr = value.as_array().map_or(&[][..], Vec::as_slice);
+            let limit = params.limit.unwrap_or(state.config.max_array_items);
+            let offset = params.offset.unwrap_or(limit); // default: next page after initial
+            let end = (offset + limit).min(arr.len());
+            let page = serde_json::Value::Array(arr[offset..end].to_vec());
+            (page, offset, end)
+        } else {
+            let obj = value.as_object().cloned().unwrap_or_default();
+            let keys: Vec<String> = obj.keys().cloned().collect();
+            let limit = params.limit.unwrap_or(state.config.max_object_keys);
+            let offset = params.offset.unwrap_or(limit);
+            let end = (offset + limit).min(keys.len());
+            let mut page_obj = serde_json::Map::new();
+            for k in &keys[offset..end] {
+                if let Some(v) = obj.get(k) {
+                    page_obj.insert(k.clone(), v.clone());
+                }
+            }
+            (serde_json::Value::Object(page_obj), offset, end)
+        };
+
+        let sliced = truncate_nested(&sliced, max_depth);
+        let has_more = end < total_count;
+        let pagination = if has_more {
+            Some(PaginationMeta {
+                token: &params.token,
+                total: total_count,
+                offset,
+                end,
+            })
+        } else {
+            None
+        };
+        let compact = format_compact(&sliced, is_array, &expression, &type_name, pagination.as_ref());
+        Ok(CallToolResult::success(vec![Content::text(compact)]))
     }
 }

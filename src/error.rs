@@ -26,6 +26,12 @@ pub enum AppError {
     #[error("failed to spawn debug adapter: {0}")]
     SpawnFailed(#[source] io::Error),
 
+    #[error("pagination token not found: {0}")]
+    PaginationTokenNotFound(String),
+
+    #[error("pagination token expired: {0}")]
+    PaginationTokenExpired(String),
+
     #[error("codec error: {0}")]
     Codec(String),
 
@@ -45,7 +51,9 @@ impl From<AppError> for McpError {
             AppError::NoSession
             | AppError::SessionActive
             | AppError::InvalidState { .. }
-            | AppError::UnauthorizedAdapter(..) => {
+            | AppError::UnauthorizedAdapter(..)
+            | AppError::PaginationTokenNotFound(_)
+            | AppError::PaginationTokenExpired(_) => {
                 McpError::invalid_params(err.to_string(), None)
             }
             _ => McpError::internal_error(err.to_string(), None),
