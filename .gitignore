@@ -1,3 +1,5 @@
 /target
 .mcp.json
-.mcp
+.mcp/
+.claude/
+.gemini/
