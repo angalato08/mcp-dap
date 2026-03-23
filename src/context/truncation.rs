@@ -38,13 +38,18 @@ pub fn summarize_object(value: &serde_json::Value, max_keys: usize) -> serde_jso
         return value.clone();
     }
 
-    let preview: serde_json::Map<String, serde_json::Value> =
-        obj.iter().take(max_keys).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let preview: serde_json::Map<String, serde_json::Value> = obj
+        .iter()
+        .take(max_keys)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
 
     let mut result = serde_json::Value::Object(preview);
-    result["_summary"] = serde_json::json!(
-        format!("[Object with {} keys — showing first {}]", obj.len(), max_keys)
-    );
+    result["_summary"] = serde_json::json!(format!(
+        "[Object with {} keys — showing first {}]",
+        obj.len(),
+        max_keys
+    ));
     result
 }
 
@@ -214,5 +219,4 @@ mod tests {
         let result = truncate_nested(&obj, 0);
         assert!(result.as_str().unwrap().contains("Object with 1 keys"));
     }
-
 }

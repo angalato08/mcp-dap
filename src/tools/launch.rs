@@ -81,14 +81,13 @@ impl DebugServer {
         // Spawn the debug adapter subprocess.
         let client = match &params.transport {
             AdapterTransport::Stdio => {
-                let process =
-                    match spawn_adapter(&params.adapter_path, &params.adapter_args) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            state.force_cleanup().await;
-                            return Err(McpError::from(e));
-                        }
-                    };
+                let process = match spawn_adapter(&params.adapter_path, &params.adapter_args) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        state.force_cleanup().await;
+                        return Err(McpError::from(e));
+                    }
+                };
                 DapClient::new(process)
             }
             AdapterTransport::Tcp(port) => {
@@ -128,7 +127,10 @@ impl DebugServer {
         *state.dap_client.lock().await = Some(client);
 
         // Run the DAP handshake, cleaning up on any failure.
-        match self.launch_handshake(state, timeout, &params, event_rx).await {
+        match self
+            .launch_handshake(state, timeout, &params, event_rx)
+            .await
+        {
             Ok(result) => Ok(result),
             Err(e) => {
                 state.force_cleanup().await;
@@ -147,7 +149,6 @@ impl DebugServer {
         params: &LaunchParams,
         mut event_rx: broadcast::Receiver<DapEvent>,
     ) -> Result<CallToolResult, McpError> {
-
         // DAP: initialize
         {
             let guard = state.dap_client.lock().await;
@@ -234,10 +235,18 @@ impl DebugServer {
             let response = tokio::time::timeout(Duration::from_secs(timeout), launch_rx)
                 .await
                 .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
-                .map_err(|_| McpError::from(AppError::DapError("launch response channel closed".into())))?;
-            let success = response.get("success").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                .map_err(|_| {
+                    McpError::from(AppError::DapError("launch response channel closed".into()))
+                })?;
+            let success = response
+                .get("success")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
             if !success {
-                let message = response.get("message").and_then(serde_json::Value::as_str).unwrap_or("unknown DAP error");
+                let message = response
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown DAP error");
                 return Err(McpError::from(AppError::DapError(message.to_string())));
             }
         }
@@ -348,7 +357,10 @@ impl DebugServer {
         *state.dap_client.lock().await = Some(client);
 
         // Run the attach handshake, cleaning up on any failure.
-        match self.attach_handshake(state, timeout, &params, event_rx).await {
+        match self
+            .attach_handshake(state, timeout, &params, event_rx)
+            .await
+        {
             Ok(result) => Ok(result),
             Err(e) => {
                 state.force_cleanup().await;
@@ -365,7 +377,6 @@ impl DebugServer {
         params: &AttachParams,
         mut event_rx: broadcast::Receiver<DapEvent>,
     ) -> Result<CallToolResult, McpError> {
-
         // DAP: initialize
         {
             let guard = state.dap_client.lock().await;
@@ -383,10 +394,7 @@ impl DebugServer {
             let guard = state.dap_client.lock().await;
             let client = guard.as_ref().ok_or(McpError::from(AppError::NoSession))?;
             client
-                .send_request(
-                    "attach",
-                    Some(serde_json::json!({ "pid": params.pid })),
-                )
+                .send_request("attach", Some(serde_json::json!({ "pid": params.pid })))
                 .await
                 .map_err(McpError::from)?
         };
@@ -434,10 +442,18 @@ impl DebugServer {
             let response = tokio::time::timeout(Duration::from_secs(timeout), attach_rx)
                 .await
                 .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
-                .map_err(|_| McpError::from(AppError::DapError("attach response channel closed".into())))?;
-            let success = response.get("success").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                .map_err(|_| {
+                    McpError::from(AppError::DapError("attach response channel closed".into()))
+                })?;
+            let success = response
+                .get("success")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
             if !success {
-                let message = response.get("message").and_then(serde_json::Value::as_str).unwrap_or("unknown DAP error");
+                let message = response
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown DAP error");
                 return Err(McpError::from(AppError::DapError(message.to_string())));
             }
         }

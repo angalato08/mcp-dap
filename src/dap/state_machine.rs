@@ -52,8 +52,14 @@ impl SessionState {
         let valid = matches!(
             (self.phase, to),
             (SessionPhase::Uninitialized, SessionPhase::Initializing)
-                | (SessionPhase::Initializing | SessionPhase::Stopped, SessionPhase::Running)
-                | (SessionPhase::Running, SessionPhase::Stopped | SessionPhase::Terminated)
+                | (
+                    SessionPhase::Initializing | SessionPhase::Stopped,
+                    SessionPhase::Running
+                )
+                | (
+                    SessionPhase::Running,
+                    SessionPhase::Stopped | SessionPhase::Terminated
+                )
                 | (SessionPhase::Stopped, SessionPhase::Terminated)
                 | (SessionPhase::Terminated, SessionPhase::Uninitialized)
         );
@@ -184,7 +190,10 @@ mod tests {
         let mut state = SessionState::new();
         let err = state.transition(SessionPhase::Running).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("Uninitialized"), "should contain 'Uninitialized': {msg}");
+        assert!(
+            msg.contains("Uninitialized"),
+            "should contain 'Uninitialized': {msg}"
+        );
         assert!(msg.contains("Running"), "should contain 'Running': {msg}");
     }
 }

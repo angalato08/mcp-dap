@@ -41,10 +41,7 @@ mod tests {
 
     #[test]
     fn preserves_normal_text() {
-        assert_eq!(
-            sanitize_debuggee_output("normal text\n"),
-            "normal text\n"
-        );
+        assert_eq!(sanitize_debuggee_output("normal text\n"), "normal text\n");
     }
 
     #[test]

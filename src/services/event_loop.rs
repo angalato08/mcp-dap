@@ -31,7 +31,10 @@ pub async fn run_event_loop(
             }
         };
 
-        let msg_type = msg.get("type").and_then(serde_json::Value::as_str).unwrap_or("");
+        let msg_type = msg
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
 
         match msg_type {
             "response" => {
@@ -57,7 +60,10 @@ pub async fn run_event_loop(
 
                 let event = match event_name {
                     "stopped" => Some(DapEvent::Stopped {
-                        thread_id: body.get("threadId").and_then(serde_json::Value::as_i64).unwrap_or(0),
+                        thread_id: body
+                            .get("threadId")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or(0),
                         reason: body
                             .get("reason")
                             .and_then(serde_json::Value::as_str)
@@ -69,10 +75,16 @@ pub async fn run_event_loop(
                             .unwrap_or(false),
                     }),
                     "continued" => Some(DapEvent::Continued {
-                        thread_id: body.get("threadId").and_then(serde_json::Value::as_i64).unwrap_or(0),
+                        thread_id: body
+                            .get("threadId")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or(0),
                     }),
                     "exited" => Some(DapEvent::Exited {
-                        exit_code: body.get("exitCode").and_then(serde_json::Value::as_i64).unwrap_or(-1),
+                        exit_code: body
+                            .get("exitCode")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or(-1),
                     }),
                     "initialized" => Some(DapEvent::Initialized),
                     "terminated" => Some(DapEvent::Terminated),
@@ -104,7 +116,10 @@ pub async fn run_event_loop(
                 // DAP reverse request from the adapter (e.g. runInTerminal).
                 // We don't support any — send an error response so the adapter
                 // doesn't block waiting forever.
-                let req_seq = msg.get("seq").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                let req_seq = msg
+                    .get("seq")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
                 let command = msg
                     .get("command")
                     .and_then(serde_json::Value::as_str)

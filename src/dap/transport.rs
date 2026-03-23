@@ -18,7 +18,7 @@ pub struct AdapterProcess {
 pub fn spawn_adapter(path: &str, args: &[String]) -> Result<AdapterProcess, AppError> {
     let mut std_command = std::process::Command::new(path);
     std_command.args(args);
-    
+
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

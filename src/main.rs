@@ -30,7 +30,10 @@ async fn main() -> Result<()> {
             "Unknown panic".to_string()
         };
 
-        let location = panic_info.location().map_or_else(|| "unknown location".to_string(), |l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+        let location = panic_info.location().map_or_else(
+            || "unknown location".to_string(),
+            |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
+        );
 
         // We open the file again in the panic hook to ensure we can write to it even if the main handle is locked or closed.
         if let Ok(mut file) = OpenOptions::new().append(true).open(&panic_log_path) {
@@ -57,7 +60,10 @@ async fn main() -> Result<()> {
     let server = DebugServer::new(state);
 
     let transport = rmcp::transport::io::stdio();
-    let server_handle = server.serve(transport).await.map_err(|e| anyhow::anyhow!("failed to start server: {e:?}"))?;
+    let server_handle = server
+        .serve(transport)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start server: {e:?}"))?;
 
     tokio::select! {
         result = server_handle.waiting() => {

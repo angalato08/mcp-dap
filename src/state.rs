@@ -167,7 +167,11 @@ mod tests {
         let state = state_with_whitelist(vec!["codelldb", "dlv"]);
         assert!(state.validate_adapter_path("codelldb").is_ok());
         assert!(state.validate_adapter_path("/usr/bin/codelldb").is_ok());
-        assert!(state.validate_adapter_path("/home/user/.local/bin/dlv").is_ok());
+        assert!(
+            state
+                .validate_adapter_path("/home/user/.local/bin/dlv")
+                .is_ok()
+        );
     }
 
     #[test]

@@ -97,8 +97,14 @@ impl DebugServer {
             .rfind(|b| b.get("line").and_then(serde_json::Value::as_i64) == Some(params.line));
 
         let msg = if let Some(bp) = our_bp {
-            let verified = bp.get("verified").and_then(serde_json::Value::as_bool).unwrap_or(false);
-            let actual_line = bp.get("line").and_then(serde_json::Value::as_i64).unwrap_or(params.line);
+            let verified = bp
+                .get("verified")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let actual_line = bp
+                .get("line")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(params.line);
             let status = if verified { "verified" } else { "pending" };
             let cond_str = params
                 .condition
@@ -128,13 +134,15 @@ impl DebugServer {
             let mut bps = state.breakpoints.lock().await;
             let Some(file_bps) = bps.get_mut(&params.file) else {
                 return Ok(CallToolResult::success(vec![Content::text(format!(
-                    "No breakpoint at {}:{}", params.file, params.line
+                    "No breakpoint at {}:{}",
+                    params.file, params.line
                 ))]));
             };
 
             if !file_bps.iter().any(|b| b.line == params.line) {
                 return Ok(CallToolResult::success(vec![Content::text(format!(
-                    "No breakpoint at {}:{}", params.file, params.line
+                    "No breakpoint at {}:{}",
+                    params.file, params.line
                 ))]));
             }
 

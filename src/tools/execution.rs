@@ -334,7 +334,10 @@ impl DebugServer {
 
         let mut output = String::new();
         for t in &threads {
-            let id = t.get("id").and_then(serde_json::Value::as_i64).unwrap_or(-1);
+            let id = t
+                .get("id")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(-1);
             let name = sanitize_debuggee_output(
                 t.get("name")
                     .and_then(serde_json::Value::as_str)

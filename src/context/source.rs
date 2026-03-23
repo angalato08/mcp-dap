@@ -14,7 +14,11 @@ pub fn extract_source_context(
     let lines: Vec<&str> = content.lines().collect();
 
     if target_line == 0 || target_line > lines.len() {
-        return Ok(format!("[line {} out of range, file has {} lines]", target_line, lines.len()));
+        return Ok(format!(
+            "[line {} out of range, file has {} lines]",
+            target_line,
+            lines.len()
+        ));
     }
 
     let start = target_line.saturating_sub(context_lines + 1);

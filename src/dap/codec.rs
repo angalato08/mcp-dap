@@ -35,8 +35,8 @@ impl Decoder for DapCodec {
         };
 
         // Parse Content-Length from the header section.
-        let header = std::str::from_utf8(&src[..sep_pos])
-            .map_err(|e| AppError::Codec(e.to_string()))?;
+        let header =
+            std::str::from_utf8(&src[..sep_pos]).map_err(|e| AppError::Codec(e.to_string()))?;
 
         let content_length: usize = header
             .lines()
