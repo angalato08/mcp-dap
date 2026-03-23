@@ -155,8 +155,10 @@ mod tests {
     use super::*;
 
     fn state_with_whitelist(adapters: Vec<&str>) -> AppState {
-        let mut config = Config::default();
-        config.allowed_adapters = adapters.into_iter().map(String::from).collect();
+        let config = Config {
+            allowed_adapters: adapters.into_iter().map(String::from).collect(),
+            ..Config::default()
+        };
         AppState::new(config)
     }
 

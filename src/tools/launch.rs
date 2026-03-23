@@ -114,10 +114,11 @@ impl DebugServer {
             .take()
             .expect("reader should be available on new client");
         let pending = client.pending.clone();
+        let writer = client.writer_handle();
         let event_tx = state.event_tx.clone();
         let crash_state = state.clone();
         tokio::spawn(async move {
-            run_event_loop(reader, pending, event_tx).await;
+            run_event_loop(reader, pending, event_tx, writer).await;
             // Adapter disconnected — clean up if session is still active.
             crash_state.force_cleanup().await;
             tracing::warn!("adapter process exited, session state cleaned up");
@@ -138,6 +139,7 @@ impl DebugServer {
 
     /// DAP handshake sequence: initialize → launch → initialized event → configurationDone.
     /// Separated from `handle_launch` so we can clean up on any failure.
+    #[allow(clippy::too_many_lines)]
     async fn launch_handshake(
         &self,
         state: &crate::state::AppState,
@@ -149,7 +151,7 @@ impl DebugServer {
         // DAP: initialize
         {
             let guard = state.dap_client.lock().await;
-            let client = guard.as_ref().unwrap();
+            let client = guard.as_ref().ok_or(McpError::from(AppError::NoSession))?;
             let caps = client
                 .send_initialize(timeout)
                 .await
@@ -158,13 +160,15 @@ impl DebugServer {
             *state.capabilities.lock().await = Some(caps);
         }
 
-        // DAP: launch (send before configurationDone — adapters emit `initialized`
-        // only after receiving the launch request).
-        {
+        // DAP: launch — send WITHOUT blocking on the response.
+        // Some adapters (debugpy) delay the launch response until after configurationDone,
+        // so we must not block here. The oneshot channel buffers it for later collection.
+        let launch_rx = {
             let mut launch_args = serde_json::json!({
                 "program": params.program,
                 "args": params.program_args,
                 "stopOnEntry": params.stop_on_entry,
+                "console": "internalConsole",
             });
             if let Some(cwd) = &params.cwd {
                 launch_args["cwd"] = serde_json::json!(cwd);
@@ -179,35 +183,63 @@ impl DebugServer {
             }
 
             let guard = state.dap_client.lock().await;
-            let client = guard.as_ref().unwrap();
-            // Fire launch request but don't wait for response yet — it completes
-            // after configurationDone.
+            let client = guard.as_ref().ok_or(McpError::from(AppError::NoSession))?;
             client
                 .send_request("launch", Some(launch_args))
                 .await
-                .map_err(McpError::from)?;
-        }
+                .map_err(McpError::from)?
+        };
 
         // Wait for the `initialized` event from the adapter.
         tokio::time::timeout(Duration::from_secs(timeout), async {
             loop {
                 match event_rx.recv().await {
-                    Ok(DapEvent::Initialized | DapEvent::AdapterCrashed) | Err(_) => break,
+                    Ok(DapEvent::Initialized) => return Ok(()),
+                    Ok(DapEvent::Exited { exit_code }) => {
+                        return Err(AppError::DapError(format!(
+                            "debuggee exited (code {exit_code}) before adapter initialized"
+                        )));
+                    }
+                    Ok(DapEvent::Terminated | DapEvent::AdapterCrashed) => {
+                        return Err(AppError::DapError(
+                            "adapter terminated before initialization completed".into(),
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(AppError::DapError(
+                            "event channel closed during initialization".into(),
+                        ));
+                    }
                     Ok(_) => {}
                 }
             }
         })
         .await
-        .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?;
+        .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
+        .map_err(McpError::from)?;
 
         // DAP: configurationDone (after initialized event, per DAP spec).
         {
             let guard = state.dap_client.lock().await;
-            let client = guard.as_ref().unwrap();
+            let client = guard.as_ref().ok_or(McpError::from(AppError::NoSession))?;
             client
                 .send_request_with_timeout("configurationDone", None, timeout)
                 .await
                 .map_err(McpError::from)?;
+        }
+
+        // Collect the deferred launch response (already buffered for fast adapters,
+        // arrives after configurationDone for debugpy).
+        {
+            let response = tokio::time::timeout(Duration::from_secs(timeout), launch_rx)
+                .await
+                .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
+                .map_err(|_| McpError::from(AppError::DapError("launch response channel closed".into())))?;
+            let success = response.get("success").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            if !success {
+                let message = response.get("message").and_then(serde_json::Value::as_str).unwrap_or("unknown DAP error");
+                return Err(McpError::from(AppError::DapError(message.to_string())));
+            }
         }
 
         // Transition: Initializing -> Running.
@@ -225,13 +257,29 @@ impl DebugServer {
             tokio::time::timeout(Duration::from_secs(timeout), async {
                 loop {
                     match event_rx.recv().await {
-                        Ok(DapEvent::Stopped { .. } | DapEvent::AdapterCrashed) | Err(_) => break,
+                        Ok(DapEvent::Stopped { .. }) => return Ok(()),
+                        Ok(DapEvent::Exited { exit_code }) => {
+                            return Err(AppError::DapError(format!(
+                                "debuggee exited (code {exit_code}) before stopping at entry"
+                            )));
+                        }
+                        Ok(DapEvent::Terminated | DapEvent::AdapterCrashed) => {
+                            return Err(AppError::DapError(
+                                "debuggee terminated before stopping at entry".into(),
+                            ));
+                        }
+                        Err(_) => {
+                            return Err(AppError::DapError(
+                                "event channel closed while waiting for entry stop".into(),
+                            ));
+                        }
                         Ok(_) => {}
                     }
                 }
             })
             .await
-            .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?;
+            .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
+            .map_err(McpError::from)?;
 
             state
                 .session
@@ -288,10 +336,11 @@ impl DebugServer {
             .take()
             .expect("reader should be available on new client");
         let pending = client.pending.clone();
+        let writer = client.writer_handle();
         let event_tx = state.event_tx.clone();
         let crash_state = state.clone();
         tokio::spawn(async move {
-            run_event_loop(reader, pending, event_tx).await;
+            run_event_loop(reader, pending, event_tx, writer).await;
             crash_state.force_cleanup().await;
             tracing::warn!("adapter process exited, session state cleaned up");
         });
@@ -320,7 +369,7 @@ impl DebugServer {
         // DAP: initialize
         {
             let guard = state.dap_client.lock().await;
-            let client = guard.as_ref().unwrap();
+            let client = guard.as_ref().ok_or(McpError::from(AppError::NoSession))?;
             let caps = client
                 .send_initialize(timeout)
                 .await
@@ -328,40 +377,69 @@ impl DebugServer {
             *state.capabilities.lock().await = Some(caps);
         }
 
-        // DAP: attach (send before configurationDone — adapters emit `initialized`
-        // only after receiving the attach request).
-        {
+        // DAP: attach — send WITHOUT blocking (same as launch: some adapters
+        // delay the response until after configurationDone).
+        let attach_rx = {
             let guard = state.dap_client.lock().await;
-            let client = guard.as_ref().unwrap();
+            let client = guard.as_ref().ok_or(McpError::from(AppError::NoSession))?;
             client
                 .send_request(
                     "attach",
                     Some(serde_json::json!({ "pid": params.pid })),
                 )
                 .await
-                .map_err(McpError::from)?;
-        }
+                .map_err(McpError::from)?
+        };
 
         // Wait for initialized event.
         tokio::time::timeout(Duration::from_secs(timeout), async {
             loop {
                 match event_rx.recv().await {
-                    Ok(DapEvent::Initialized | DapEvent::AdapterCrashed) | Err(_) => break,
+                    Ok(DapEvent::Initialized) => return Ok(()),
+                    Ok(DapEvent::Exited { exit_code }) => {
+                        return Err(AppError::DapError(format!(
+                            "debuggee exited (code {exit_code}) before adapter initialized"
+                        )));
+                    }
+                    Ok(DapEvent::Terminated | DapEvent::AdapterCrashed) => {
+                        return Err(AppError::DapError(
+                            "adapter terminated before initialization completed".into(),
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(AppError::DapError(
+                            "event channel closed during initialization".into(),
+                        ));
+                    }
                     Ok(_) => {}
                 }
             }
         })
         .await
-        .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?;
+        .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
+        .map_err(McpError::from)?;
 
         // DAP: configurationDone (after initialized event, per DAP spec).
         {
             let guard = state.dap_client.lock().await;
-            let client = guard.as_ref().unwrap();
+            let client = guard.as_ref().ok_or(McpError::from(AppError::NoSession))?;
             client
                 .send_request_with_timeout("configurationDone", None, timeout)
                 .await
                 .map_err(McpError::from)?;
+        }
+
+        // Collect the deferred attach response.
+        {
+            let response = tokio::time::timeout(Duration::from_secs(timeout), attach_rx)
+                .await
+                .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
+                .map_err(|_| McpError::from(AppError::DapError("attach response channel closed".into())))?;
+            let success = response.get("success").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            if !success {
+                let message = response.get("message").and_then(serde_json::Value::as_str).unwrap_or("unknown DAP error");
+                return Err(McpError::from(AppError::DapError(message.to_string())));
+            }
         }
 
         state

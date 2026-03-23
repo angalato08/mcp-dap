@@ -16,13 +16,31 @@ pub struct AdapterProcess {
 
 /// Spawn a debug adapter subprocess, capturing stdin/stdout for DAP communication.
 pub fn spawn_adapter(path: &str, args: &[String]) -> Result<AdapterProcess, AppError> {
-    let mut child = Command::new(path)
-        .args(args)
+    let mut std_command = std::process::Command::new(path);
+    std_command.args(args);
+    
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid() is async-signal-safe and has no preconditions.
+        // Creates a new session so the adapter and its children cannot
+        // read from the parent's controlling terminal (which would send
+        // SIGTTIN and suspend the MCP host process).
+        unsafe {
+            std_command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+
+    let mut command = Command::from(std_command);
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(AppError::SpawnFailed)?;
+        .stderr(Stdio::null());
+
+    let mut child = command.spawn().map_err(AppError::SpawnFailed)?;
 
     let stdin = child.stdin.take().expect("stdin was piped");
     let stdout = child.stdout.take().expect("stdout was piped");
@@ -48,13 +66,28 @@ pub async fn spawn_tcp_adapter(
     let mut full_args = args.to_vec();
     full_args.extend_from_slice(&["-l".into(), addr.clone()]);
 
-    let child = Command::new(path)
-        .args(&full_args)
+    let mut std_command = std::process::Command::new(path);
+    std_command.args(&full_args);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid() is async-signal-safe and has no preconditions.
+        unsafe {
+            std_command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+
+    let mut command = Command::from(std_command);
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(AppError::SpawnFailed)?;
+        .stderr(Stdio::null());
+
+    let child = command.spawn().map_err(AppError::SpawnFailed)?;
 
     // Wait for the adapter to start listening.
     let stream = retry_connect(&addr, 20, Duration::from_millis(200)).await?;

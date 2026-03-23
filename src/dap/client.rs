@@ -23,7 +23,7 @@ pub type PendingMap = Arc<Mutex<HashMap<i64, oneshot::Sender<serde_json::Value>>
 
 /// DAP client that multiplexes requests/responses over a transport (stdio or TCP).
 pub struct DapClient {
-    writer: Mutex<DapWriter>,
+    writer: Arc<Mutex<DapWriter>>,
     seq: AtomicI64,
     pub pending: PendingMap,
     pub reader: Mutex<Option<DapReader>>,
@@ -37,7 +37,7 @@ impl DapClient {
         let reader: Box<dyn AsyncRead + Send + Unpin> = Box::new(process.stdout);
 
         Self {
-            writer: Mutex::new(FramedWrite::new(writer, DapCodec)),
+            writer: Arc::new(Mutex::new(FramedWrite::new(writer, DapCodec))),
             seq: AtomicI64::new(1),
             pending: Arc::new(Mutex::new(HashMap::new())),
             reader: Mutex::new(Some(FramedRead::new(BufReader::new(reader), DapCodec))),
@@ -55,12 +55,17 @@ impl DapClient {
         let reader: Box<dyn AsyncRead + Send + Unpin> = Box::new(read_half);
 
         Self {
-            writer: Mutex::new(FramedWrite::new(writer, DapCodec)),
+            writer: Arc::new(Mutex::new(FramedWrite::new(writer, DapCodec))),
             seq: AtomicI64::new(1),
             pending: Arc::new(Mutex::new(HashMap::new())),
             reader: Mutex::new(Some(FramedRead::new(BufReader::new(reader), DapCodec))),
             child: Mutex::new(Some(child)),
         }
+    }
+
+    /// Get a cloneable handle to the DAP writer (for the event loop to send reverse-request error responses).
+    pub fn writer_handle(&self) -> Arc<Mutex<DapWriter>> {
+        self.writer.clone()
     }
 
     /// Send a DAP request and return a receiver for the response.

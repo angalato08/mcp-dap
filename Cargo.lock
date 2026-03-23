@@ -336,6 +336,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "futures",
+ "libc",
  "memchr",
  "rmcp",
  "schemars 0.8.22",

@@ -18,6 +18,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 memchr = "2"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [lints.clippy]
 all = "deny"
 pedantic = "deny"

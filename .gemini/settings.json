@@ -10,7 +10,7 @@
             ]
         },
         "mcp-dap-rs": {
-            "command": "target/release/mcp-dap-rs"
+            "command": "/home/angalato/workspace/mcp_dap/target/release/mcp-dap-rs"
         }
     },
     "general": {

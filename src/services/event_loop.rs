@@ -1,19 +1,24 @@
-use futures::StreamExt;
-use tokio::sync::broadcast;
+use std::sync::Arc;
+
+use futures::{SinkExt, StreamExt};
+use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, error, instrument, warn};
 
 use crate::context::sanitize::sanitize_debuggee_output;
-use crate::dap::client::{DapReader, PendingMap};
+use crate::dap::client::{DapReader, DapWriter, PendingMap};
 use crate::dap::types::DapEvent;
 
 /// Read DAP messages from adapter.
 /// - Responses (matching a pending `seq`) are dispatched via oneshot channels.
 /// - Events are broadcast to all subscribers (tool handlers awaiting stopped/terminated).
+/// - Reverse requests from the adapter are rejected with an error response.
 #[instrument(skip_all)]
+#[allow(clippy::too_many_lines)]
 pub async fn run_event_loop(
     reader: DapReader,
     pending: PendingMap,
     event_tx: broadcast::Sender<DapEvent>,
+    writer: Arc<Mutex<DapWriter>>,
 ) {
     let mut reader = reader;
 
@@ -84,7 +89,7 @@ pub async fn run_event_loop(
                     }),
                     "capabilities" => Some(DapEvent::Capabilities(body)),
                     _ => {
-                        debug!("unhandled DAP event: {event_name}");
+                        debug!("unhandled DAP event: {event_name} body={:?}", body);
                         None
                     }
                 };
@@ -93,6 +98,30 @@ pub async fn run_event_loop(
                     && event_tx.send(event).is_err()
                 {
                     debug!("no event subscribers");
+                }
+            }
+            "request" => {
+                // DAP reverse request from the adapter (e.g. runInTerminal).
+                // We don't support any — send an error response so the adapter
+                // doesn't block waiting forever.
+                let req_seq = msg.get("seq").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                let command = msg
+                    .get("command")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown");
+                warn!("unsupported DAP reverse request: {command} (seq={req_seq})");
+
+                let err_resp = serde_json::json!({
+                    "seq": 0,
+                    "type": "response",
+                    "request_seq": req_seq,
+                    "command": command,
+                    "success": false,
+                    "message": format!("mcp-dap-rs does not support reverse request '{command}'"),
+                });
+                if let Err(e) = writer.lock().await.send(err_resp).await {
+                    error!("failed to send reverse-request error response: {e}");
+                    break;
                 }
             }
             _ => {

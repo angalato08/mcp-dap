@@ -18,16 +18,32 @@ async fn main() -> Result<()> {
         .open("/tmp/mcp-dap.log")
         .expect("failed to open /tmp/mcp-dap.log");
 
+    // Set a panic hook to log panics to the log file.
+    std::panic::set_hook(Box::new(|panic_info| {
+        let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
+
+        let location = panic_info.location().map_or_else(|| "unknown location".to_string(), |l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+
+        // We open the file again in the panic hook to ensure we can write to it even if the main handle is locked or closed.
+        if let Ok(mut file) = OpenOptions::new().append(true).open("/tmp/mcp-dap.log") {
+            use std::io::Write;
+            let _ = writeln!(file, "PANIC occurred at {location}: {message}");
+            let _ = file.flush();
+        }
+    }));
+
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::sync::Mutex::new(log_file))
         .with_ansi(false);
 
-    let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr);
-
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env().add_directive(tracing::Level::DEBUG.into()))
-        .with(stderr_layer)
         .with(file_layer)
         .init();
 
@@ -39,11 +55,14 @@ async fn main() -> Result<()> {
     let server = DebugServer::new(state);
 
     let transport = rmcp::transport::io::stdio();
-    let server_handle = server.serve(transport).await?;
+    let server_handle = server.serve(transport).await.map_err(|e| anyhow::anyhow!("failed to start server: {e:?}"))?;
 
     tokio::select! {
         result = server_handle.waiting() => {
-            result?;
+            if let Err(e) = result {
+                tracing::error!("MCP server crashed with error: {e:?}");
+                return Err(anyhow::anyhow!("server crashed: {e:?}"));
+            }
             tracing::info!("MCP server shut down cleanly");
         }
         _ = tokio::signal::ctrl_c() => {

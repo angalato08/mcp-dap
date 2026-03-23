@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+use mcp_dap_rs::tools::launch::AdapterTransport;
+
 const CODELLDB_PATH: &str = "/tmp/codelldb/extension/adapter/codelldb";
 const DLV_PATH: &str = "/home/angalato/go/bin/dlv";
 
@@ -41,7 +43,7 @@ async fn test_debugpy_step_through_loop() {
             program_args: vec![],
             cwd: None,
             stop_on_entry: true,
-            transport: Default::default(),
+            transport: AdapterTransport::default(),
             extra_launch_args: None,
         })
         .await;
@@ -119,7 +121,7 @@ async fn test_debugpy_step_through_loop() {
     assert!(text.contains("disconnected"), "got: {text}");
 }
 
-/// CodeLLDB: launch the project binary, stop at entry, inspect stack, disconnect.
+/// `CodeLLDB`: launch the project binary, stop at entry, inspect stack, disconnect.
 #[tokio::test]
 #[ignore = "requires codelldb adapter"]
 async fn test_codelldb_launch_and_inspect() {
@@ -139,7 +141,7 @@ async fn test_codelldb_launch_and_inspect() {
             program_args: vec![],
             cwd: None,
             stop_on_entry: true,
-            transport: Default::default(),
+            transport: AdapterTransport::default(),
             extra_launch_args: None,
         })
         .await
@@ -345,7 +347,7 @@ async fn test_launch_bad_adapter_cleans_up() {
             program_args: vec![],
             cwd: None,
             stop_on_entry: false,
-            transport: Default::default(),
+            transport: AdapterTransport::default(),
             extra_launch_args: None,
         })
         .await;
@@ -361,7 +363,7 @@ async fn test_launch_bad_adapter_cleans_up() {
             program_args: vec![],
             cwd: None,
             stop_on_entry: false,
-            transport: Default::default(),
+            transport: AdapterTransport::default(),
             extra_launch_args: None,
         })
         .await;
@@ -396,7 +398,7 @@ async fn test_adapter_crash_recovery() {
             program_args: vec![],
             cwd: None,
             stop_on_entry: true,
-            transport: Default::default(),
+            transport: AdapterTransport::default(),
             extra_launch_args: None,
         })
         .await
@@ -407,10 +409,10 @@ async fn test_adapter_crash_recovery() {
     // Force-kill the adapter process to simulate a crash
     {
         let guard = server.state.dap_client.lock().await;
-        if let Some(client) = guard.as_ref() {
-            if let Some(child) = client.child.lock().await.as_mut() {
-                child.kill().await.expect("kill adapter");
-            }
+        if let Some(client) = guard.as_ref()
+            && let Some(child) = client.child.lock().await.as_mut()
+        {
+            child.kill().await.expect("kill adapter");
         }
     }
 
@@ -440,12 +442,12 @@ async fn test_adapter_crash_recovery() {
         .expect("should be able to start a new session after crash");
 }
 
-/// Extract text from the first content item in a CallToolResult.
+/// Extract text from the first content item in a `CallToolResult`.
 fn content_text(result: &rmcp::model::CallToolResult) -> String {
     result
         .content
         .first()
         .and_then(|c| c.raw.as_text())
-        .map(|t| t.text.to_string())
+        .map(|t| t.text.clone())
         .unwrap_or_default()
 }
