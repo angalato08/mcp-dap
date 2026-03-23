@@ -28,6 +28,12 @@ pub struct Config {
     /// Time-to-live in seconds for pagination cache entries.
     pub pagination_cache_ttl_secs: u64,
 
+    /// Maximum number of scopes to expand for auto-context locals (0 disables).
+    pub auto_context_max_scopes: usize,
+
+    /// Maximum top-level variables per scope in auto-context output.
+    pub auto_context_max_vars_per_scope: usize,
+
     /// Allowed debug adapter basenames (e.g. "codelldb", "debugpy").
     /// Empty list disables the whitelist (allows all adapters).
     pub allowed_adapters: Vec<String>,
@@ -44,6 +50,8 @@ impl Default for Config {
             max_nesting_depth: 3,
             pagination_cache_max_entries: 50,
             pagination_cache_ttl_secs: 300,
+            auto_context_max_scopes: 3,
+            auto_context_max_vars_per_scope: 20,
             allowed_adapters: vec![
                 "codelldb".into(),
                 "debugpy".into(),

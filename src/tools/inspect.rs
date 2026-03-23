@@ -299,38 +299,30 @@ impl DebugServer {
         }
     }
 
-    /// Get the current call stack with auto-injected source context.
-    pub async fn handle_get_stack(
+    /// Fetch the call stack with auto-injected source context.
+    /// Returns `(formatted_text, raw_frames)` for reuse by auto-context.
+    async fn fetch_stack_with_source(
         &self,
-        params: GetStackParams,
-    ) -> Result<CallToolResult, McpError> {
+        thread_id: i64,
+        max_frames: usize,
+    ) -> Result<(String, Vec<serde_json::Value>), AppError> {
         let state = &self.state;
-        state
-            .require_phase(&[SessionPhase::Running, SessionPhase::Stopped])
-            .await
-            .map_err(McpError::from)?;
         let timeout = state.config.dap_timeout_secs;
         let context_lines = state.config.source_context_lines;
 
-        let thread_id = self
-            .resolve_thread_id(params.thread_id)
-            .await
-            .map_err(McpError::from)?;
-
         let body = {
-            let guard = state.require_client().await.map_err(McpError::from)?;
+            let guard = state.require_client().await?;
             let client = guard.as_ref().unwrap();
             client
                 .send_request_with_timeout(
                     "stackTrace",
                     Some(serde_json::json!({
                         "threadId": thread_id,
-                        "levels": params.max_frames,
+                        "levels": max_frames,
                     })),
                     timeout,
                 )
-                .await
-                .map_err(McpError::from)?
+                .await?
         };
 
         let frames = body
@@ -338,12 +330,6 @@ impl DebugServer {
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
-
-        if frames.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "No stack frames available",
-            )]));
-        }
 
         let mut output = String::new();
 
@@ -384,7 +370,213 @@ impl DebugServer {
             }
         }
 
+        Ok((output, frames))
+    }
+
+    /// Get the current call stack with auto-injected source context.
+    pub async fn handle_get_stack(
+        &self,
+        params: GetStackParams,
+    ) -> Result<CallToolResult, McpError> {
+        let state = &self.state;
+        state
+            .require_phase(&[SessionPhase::Running, SessionPhase::Stopped])
+            .await
+            .map_err(McpError::from)?;
+
+        let thread_id = self
+            .resolve_thread_id(params.thread_id)
+            .await
+            .map_err(McpError::from)?;
+
+        let (output, frames) = self
+            .fetch_stack_with_source(thread_id, params.max_frames)
+            .await
+            .map_err(McpError::from)?;
+
+        if frames.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No stack frames available",
+            )]));
+        }
+
         Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Fetch scopes and top-level variables for a single frame.
+    /// Best-effort: returns empty string on any DAP error.
+    #[allow(clippy::too_many_lines)]
+    async fn fetch_scope_locals(
+        &self,
+        frame_id: i64,
+        max_scopes: usize,
+        max_vars_per_scope: usize,
+    ) -> String {
+        if max_scopes == 0 {
+            return String::new();
+        }
+
+        let state = &self.state;
+        let timeout = state.config.dap_timeout_secs;
+        let max_var_len = state.config.max_variable_length;
+
+        // Fetch scopes for this frame.
+        let scopes_body = match async {
+            let guard = state.require_client().await?;
+            let client = guard.as_ref().unwrap();
+            client
+                .send_request_with_timeout(
+                    "scopes",
+                    Some(serde_json::json!({ "frameId": frame_id })),
+                    timeout,
+                )
+                .await
+        }
+        .await
+        {
+            Ok(body) => body,
+            Err(e) => {
+                warn!("auto-context: failed to fetch scopes: {e}");
+                return String::new();
+            }
+        };
+
+        let scopes = scopes_body
+            .get("scopes")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut output = String::new();
+
+        for scope in scopes.iter().take(max_scopes) {
+            let scope_name = scope
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Scope");
+            let variables_ref = scope
+                .get("variablesReference")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+
+            if variables_ref <= 0 {
+                continue;
+            }
+
+            // Fetch variables for this scope.
+            let vars_body = match async {
+                let guard = state.require_client().await?;
+                let client = guard.as_ref().unwrap();
+                client
+                    .send_request_with_timeout(
+                        "variables",
+                        Some(serde_json::json!({ "variablesReference": variables_ref })),
+                        timeout,
+                    )
+                    .await
+            }
+            .await
+            {
+                Ok(body) => body,
+                Err(e) => {
+                    warn!("auto-context: failed to fetch variables for scope {scope_name}: {e}");
+                    continue;
+                }
+            };
+
+            let variables = vars_body
+                .get("variables")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+
+            // Filter debugpy noise (same as fetch_children_raw).
+            let filtered: Vec<&serde_json::Value> = variables
+                .iter()
+                .filter(|v| {
+                    let name = v.get("name").and_then(serde_json::Value::as_str).unwrap_or("");
+                    !matches!(name, "special variables" | "function variables")
+                        && name != "len()"
+                        && !(name.starts_with("__") && name.ends_with("__"))
+                })
+                .take(max_vars_per_scope)
+                .collect();
+
+            if filtered.is_empty() {
+                continue;
+            }
+
+            let _ = writeln!(output, "\n{scope_name}:");
+            for var in &filtered {
+                let name = sanitize_debuggee_output(
+                    var.get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("?"),
+                );
+                let value = sanitize_debuggee_output(
+                    var.get("value")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(""),
+                );
+                let value = truncate_value(&value, max_var_len);
+                let type_name = var
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if type_name.is_empty() {
+                    let _ = writeln!(output, "  {name}: {value}");
+                } else {
+                    let _ = writeln!(output, "  {name}: {value} ({type_name})");
+                }
+            }
+        }
+
+        output
+    }
+
+    /// Build rich auto-context for a stopped event: stack trace + source + locals.
+    /// Best-effort: returns just the header if stack fetch fails.
+    pub(super) async fn build_stopped_auto_context(
+        &self,
+        thread_id: i64,
+        header: &str,
+    ) -> String {
+        let mut result = header.to_string();
+
+        // Fetch stack trace with source snippets.
+        let (stack_text, frames) = match self
+            .fetch_stack_with_source(thread_id, default_max_frames())
+            .await
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!("auto-context: failed to fetch stack: {e}");
+                return result;
+            }
+        };
+
+        if frames.is_empty() {
+            return result;
+        }
+
+        result.push_str("\n\n");
+        result.push_str(&stack_text);
+
+        // Get the top frame's ID for scope/locals lookup.
+        if let Some(frame_id) = frames
+            .first()
+            .and_then(|f| f.get("id"))
+            .and_then(serde_json::Value::as_i64)
+        {
+            let max_scopes = self.state.config.auto_context_max_scopes;
+            let max_vars = self.state.config.auto_context_max_vars_per_scope;
+            let locals = self.fetch_scope_locals(frame_id, max_scopes, max_vars).await;
+            if !locals.is_empty() {
+                result.push_str(&locals);
+            }
+        }
+
+        result
     }
     /// Summarize a raw compound value, caching for pagination if it exceeds limits.
     /// Returns `(sliced_value, is_array, Option<(token, total)>)`.

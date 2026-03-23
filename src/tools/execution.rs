@@ -51,6 +51,61 @@ pub struct PauseParams {
 pub struct ThreadsParams {}
 
 impl DebugServer {
+    /// Handle a stopped/exited/terminated event with auto-context enrichment.
+    async fn handle_stopped_event(
+        &self,
+        event: &DapEvent,
+        action_label: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let state = &self.state;
+
+        match event {
+            DapEvent::Stopped {
+                thread_id,
+                reason,
+                all_threads_stopped,
+            } => {
+                state
+                    .session
+                    .lock()
+                    .await
+                    .transition(SessionPhase::Stopped)
+                    .map_err(McpError::from)?;
+                let scope = if *all_threads_stopped {
+                    ", all threads stopped"
+                } else {
+                    ""
+                };
+                let header = format!("{action_label}: {reason} (thread {thread_id}{scope})");
+                let rich = self.build_stopped_auto_context(*thread_id, &header).await;
+                Ok(CallToolResult::success(vec![Content::text(rich)]))
+            }
+            DapEvent::Exited { exit_code } => {
+                state
+                    .session
+                    .lock()
+                    .await
+                    .transition(SessionPhase::Terminated)
+                    .map_err(McpError::from)?;
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Process exited with code {exit_code}"
+                ))]))
+            }
+            DapEvent::Terminated => {
+                state
+                    .session
+                    .lock()
+                    .await
+                    .transition(SessionPhase::Terminated)
+                    .map_err(McpError::from)?;
+                Ok(CallToolResult::success(vec![Content::text(
+                    "Debug session terminated".to_string(),
+                )]))
+            }
+            _ => unreachable!(),
+        }
+    }
+
     /// Resolve a thread ID: use the provided one, or query the adapter for the first thread.
     pub(super) async fn resolve_thread_id(&self, thread_id: Option<i64>) -> Result<i64, AppError> {
         if let Some(id) = thread_id {
@@ -139,52 +194,7 @@ impl DebugServer {
         .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
         .map_err(McpError::from)?;
 
-        // Update session state and build response.
-        match &event {
-            DapEvent::Stopped {
-                thread_id,
-                reason,
-                all_threads_stopped,
-            } => {
-                state
-                    .session
-                    .lock()
-                    .await
-                    .transition(SessionPhase::Stopped)
-                    .map_err(McpError::from)?;
-                let scope = if *all_threads_stopped {
-                    ", all threads stopped"
-                } else {
-                    ""
-                };
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Stopped: {reason} (thread {thread_id}{scope})"
-                ))]))
-            }
-            DapEvent::Exited { exit_code } => {
-                state
-                    .session
-                    .lock()
-                    .await
-                    .transition(SessionPhase::Terminated)
-                    .map_err(McpError::from)?;
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Process exited with code {exit_code}"
-                ))]))
-            }
-            DapEvent::Terminated => {
-                state
-                    .session
-                    .lock()
-                    .await
-                    .transition(SessionPhase::Terminated)
-                    .map_err(McpError::from)?;
-                Ok(CallToolResult::success(vec![Content::text(
-                    "Debug session terminated".to_string(),
-                )]))
-            }
-            _ => unreachable!(),
-        }
+        self.handle_stopped_event(&event, "Stopped").await
     }
 
     /// Step in, out, or over the current line.
@@ -254,51 +264,8 @@ impl DebugServer {
         .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
         .map_err(McpError::from)?;
 
-        match &event {
-            DapEvent::Stopped {
-                thread_id,
-                reason,
-                all_threads_stopped,
-            } => {
-                state
-                    .session
-                    .lock()
-                    .await
-                    .transition(SessionPhase::Stopped)
-                    .map_err(McpError::from)?;
-                let scope = if *all_threads_stopped {
-                    ", all threads stopped"
-                } else {
-                    ""
-                };
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Stepped ({command}): {reason} (thread {thread_id}{scope})"
-                ))]))
-            }
-            DapEvent::Exited { exit_code } => {
-                state
-                    .session
-                    .lock()
-                    .await
-                    .transition(SessionPhase::Terminated)
-                    .map_err(McpError::from)?;
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Process exited with code {exit_code}"
-                ))]))
-            }
-            DapEvent::Terminated => {
-                state
-                    .session
-                    .lock()
-                    .await
-                    .transition(SessionPhase::Terminated)
-                    .map_err(McpError::from)?;
-                Ok(CallToolResult::success(vec![Content::text(
-                    "Debug session terminated".to_string(),
-                )]))
-            }
-            _ => unreachable!(),
-        }
+        self.handle_stopped_event(&event, &format!("Stepped ({command})"))
+            .await
     }
 
     /// Pause one or all threads.
@@ -348,29 +315,7 @@ impl DebugServer {
         .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
         .map_err(McpError::from)?;
 
-        if let DapEvent::Stopped {
-            thread_id,
-            all_threads_stopped,
-            ..
-        } = &event
-        {
-            // Transition Running -> Stopped.
-            let _ = state
-                .session
-                .lock()
-                .await
-                .transition(SessionPhase::Stopped);
-            let scope = if *all_threads_stopped {
-                "all threads paused"
-            } else {
-                &format!("thread {thread_id} paused")
-            };
-            Ok(CallToolResult::success(vec![Content::text(format!(
-                "Paused: {scope}"
-            ))]))
-        } else {
-            unreachable!()
-        }
+        self.handle_stopped_event(&event, "Paused").await
     }
 
     /// List all threads in the debuggee.

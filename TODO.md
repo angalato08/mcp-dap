@@ -14,9 +14,10 @@
 - [x] Depth-limited truncation (`truncate_nested`) for deeply nested structures
 - [x] Thread-aware execution: expose thread list, support multi-thread debugging
 - [x] LLM prompt injection sanitizer (`sanitize_debuggee_output`) for untrusted debuggee output
-- [ ] Pagination for truncated results — when large arrays/objects are summarized (e.g. showing 10 of 10,000 items), provide a pagination token so the agent can request the next page without re-evaluating
-- [ ] Auto-context in stopped events — when a breakpoint hits, proactively attach source snippets to the `DapEvent::Stopped` broadcast so the LLM sees where it stopped without a follow-up `debug_get_stack` call
-- [ ] Local variables per stack frame — enrich `debug_get_stack` to include scopes and local variables for each frame, giving the LLM full context in one call instead of requiring follow-up `debug_evaluate` calls
+- [x] Pagination for truncated results — when large arrays/objects are summarized (e.g. showing 10 of 10,000 items), provide a pagination token so the agent can request the next page without re-evaluating
+- [x] Compact output for `debug_evaluate` and `debug_get_page` — ~85% token reduction vs pretty-printed JSON, debugpy metadata filtering
+- [x] Auto-context in stopped events — when a breakpoint hits, proactively attach source snippets to the `DapEvent::Stopped` broadcast so the LLM sees where it stopped without a follow-up `debug_get_stack` call
+- [x] Local variables per stack frame — enrich `debug_get_stack` to include scopes and local variables for each frame, giving the LLM full context in one call instead of requiring follow-up `debug_evaluate` calls
 
 ## Phase 3: Distribution & Zero-Config
 
