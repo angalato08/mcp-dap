@@ -5,7 +5,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::DebugServer;
-use crate::dap::state_machine::SessionPhase;
 
 /// A tracked breakpoint with line and optional condition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,14 +40,6 @@ impl DebugServer {
         params: SetBreakpointParams,
     ) -> Result<CallToolResult, McpError> {
         let state = &self.state;
-        state
-            .require_phase(&[
-                SessionPhase::Initializing,
-                SessionPhase::Running,
-                SessionPhase::Stopped,
-            ])
-            .await
-            .map_err(McpError::from)?;
         let timeout = state.config.dap_timeout_secs;
 
         // Build the new breakpoint entry.
@@ -131,14 +122,6 @@ impl DebugServer {
         params: RemoveBreakpointParams,
     ) -> Result<CallToolResult, McpError> {
         let state = &self.state;
-        state
-            .require_phase(&[
-                SessionPhase::Initializing,
-                SessionPhase::Running,
-                SessionPhase::Stopped,
-            ])
-            .await
-            .map_err(McpError::from)?;
         let timeout = state.config.dap_timeout_secs;
 
         let remaining = {

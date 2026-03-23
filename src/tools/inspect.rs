@@ -16,7 +16,6 @@ use crate::context::sanitize::sanitize_debuggee_output;
 use crate::context::source::extract_source_context;
 use crate::context::pagination::CacheEntry;
 use crate::context::truncation::{truncate_nested, truncate_value};
-use crate::dap::state_machine::SessionPhase;
 use crate::error::AppError;
 
 use std::time::SystemTime;
@@ -378,12 +377,6 @@ impl DebugServer {
         &self,
         params: GetStackParams,
     ) -> Result<CallToolResult, McpError> {
-        let state = &self.state;
-        state
-            .require_phase(&[SessionPhase::Running, SessionPhase::Stopped])
-            .await
-            .map_err(McpError::from)?;
-
         let thread_id = self
             .resolve_thread_id(params.thread_id)
             .await
@@ -630,10 +623,6 @@ impl DebugServer {
         params: EvaluateParams,
     ) -> Result<CallToolResult, McpError> {
         let state = &self.state;
-        state
-            .require_phase(&[SessionPhase::Running, SessionPhase::Stopped])
-            .await
-            .map_err(McpError::from)?;
         let timeout = state.config.dap_timeout_secs;
 
         let frame_id = self

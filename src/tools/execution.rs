@@ -136,10 +136,6 @@ impl DebugServer {
         params: ContinueParams,
     ) -> Result<CallToolResult, McpError> {
         let state = &self.state;
-        state
-            .require_phase(&[SessionPhase::Stopped])
-            .await
-            .map_err(McpError::from)?;
 
         // Resolve thread before sending continue.
         let thread_id = self
@@ -200,10 +196,6 @@ impl DebugServer {
     /// Step in, out, or over the current line.
     pub async fn handle_step(&self, params: StepParams) -> Result<CallToolResult, McpError> {
         let state = &self.state;
-        state
-            .require_phase(&[SessionPhase::Stopped])
-            .await
-            .map_err(McpError::from)?;
 
         let thread_id = self
             .resolve_thread_id(params.thread_id)
@@ -271,10 +263,6 @@ impl DebugServer {
     /// Pause one or all threads.
     pub async fn handle_pause(&self, params: PauseParams) -> Result<CallToolResult, McpError> {
         let state = &self.state;
-        state
-            .require_phase(&[SessionPhase::Running])
-            .await
-            .map_err(McpError::from)?;
         let timeout = state.config.dap_timeout_secs;
 
         let thread_id = self
@@ -321,10 +309,6 @@ impl DebugServer {
     /// List all threads in the debuggee.
     pub async fn handle_threads(&self) -> Result<CallToolResult, McpError> {
         let state = &self.state;
-        state
-            .require_phase(&[SessionPhase::Running, SessionPhase::Stopped])
-            .await
-            .map_err(McpError::from)?;
         let timeout = state.config.dap_timeout_secs;
 
         let body = {

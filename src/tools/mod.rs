@@ -8,6 +8,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 
+use crate::dap::state_machine::SessionPhase;
 use crate::state::AppState;
 
 /// MCP server exposing debug tools to AI agents.
@@ -49,6 +50,7 @@ impl DebugServer {
         &self,
         params: Parameters<breakpoint::SetBreakpointParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.state.require_phase(&[SessionPhase::Initializing, SessionPhase::Running, SessionPhase::Stopped]).await.map_err(McpError::from)?;
         self.handle_set_breakpoint(params.0).await
     }
 
@@ -57,6 +59,7 @@ impl DebugServer {
         &self,
         params: Parameters<breakpoint::RemoveBreakpointParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.state.require_phase(&[SessionPhase::Initializing, SessionPhase::Running, SessionPhase::Stopped]).await.map_err(McpError::from)?;
         self.handle_remove_breakpoint(params.0).await
     }
 
@@ -65,6 +68,7 @@ impl DebugServer {
         &self,
         params: Parameters<execution::ContinueParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.state.require_phase(&[SessionPhase::Stopped]).await.map_err(McpError::from)?;
         self.handle_continue(params.0).await
     }
 
@@ -73,6 +77,7 @@ impl DebugServer {
         &self,
         params: Parameters<execution::StepParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.state.require_phase(&[SessionPhase::Stopped]).await.map_err(McpError::from)?;
         self.handle_step(params.0).await
     }
 
@@ -81,6 +86,7 @@ impl DebugServer {
         &self,
         params: Parameters<inspect::GetStackParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.state.require_phase(&[SessionPhase::Running, SessionPhase::Stopped]).await.map_err(McpError::from)?;
         self.handle_get_stack(params.0).await
     }
 
@@ -89,6 +95,7 @@ impl DebugServer {
         &self,
         params: Parameters<inspect::EvaluateParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.state.require_phase(&[SessionPhase::Running, SessionPhase::Stopped]).await.map_err(McpError::from)?;
         self.handle_evaluate(params.0).await
     }
 
@@ -97,6 +104,7 @@ impl DebugServer {
         &self,
         params: Parameters<execution::PauseParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.state.require_phase(&[SessionPhase::Running]).await.map_err(McpError::from)?;
         self.handle_pause(params.0).await
     }
 
@@ -105,6 +113,7 @@ impl DebugServer {
         &self,
         _params: Parameters<execution::ThreadsParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.state.require_phase(&[SessionPhase::Running, SessionPhase::Stopped]).await.map_err(McpError::from)?;
         self.handle_threads().await
     }
 
@@ -113,6 +122,7 @@ impl DebugServer {
         &self,
         params: Parameters<inspect::GetPageParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.state.require_phase(&[SessionPhase::Running, SessionPhase::Stopped]).await.map_err(McpError::from)?;
         self.handle_get_page(params.0).await
     }
 
