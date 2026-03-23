@@ -12,14 +12,16 @@ use mcp_dap_rs::tools::DebugServer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let log_path = std::env::temp_dir().join("mcp-dap.log");
     let log_file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/mcp-dap.log")
-        .expect("failed to open /tmp/mcp-dap.log");
+        .open(&log_path)
+        .unwrap_or_else(|e| panic!("failed to open {}: {e}", log_path.display()));
 
     // Set a panic hook to log panics to the log file.
-    std::panic::set_hook(Box::new(|panic_info| {
+    let panic_log_path = log_path.clone();
+    std::panic::set_hook(Box::new(move |panic_info| {
         let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             s.to_string()
         } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
@@ -31,7 +33,7 @@ async fn main() -> Result<()> {
         let location = panic_info.location().map_or_else(|| "unknown location".to_string(), |l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
 
         // We open the file again in the panic hook to ensure we can write to it even if the main handle is locked or closed.
-        if let Ok(mut file) = OpenOptions::new().append(true).open("/tmp/mcp-dap.log") {
+        if let Ok(mut file) = OpenOptions::new().append(true).open(&panic_log_path) {
             use std::io::Write;
             let _ = writeln!(file, "PANIC occurred at {location}: {message}");
             let _ = file.flush();

@@ -21,6 +21,11 @@ memchr = "2"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
 [lints.clippy]
 all = "deny"
 pedantic = "deny"
