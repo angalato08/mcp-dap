@@ -29,3 +29,11 @@ codegen-units = 1
 [lints.clippy]
 all = "deny"
 pedantic = "deny"
+
+[[example]]
+name = "fork"
+path = "tests/fixtures/fork.rs"
+
+[[example]]
+name = "mutex_block"
+path = "tests/fixtures/mutex_block.rs"

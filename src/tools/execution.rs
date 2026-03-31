@@ -20,6 +20,8 @@ pub struct ContinueParams {
     /// If true, only resume this thread; other threads stay paused.
     #[serde(default)]
     pub single_thread: bool,
+    /// Timeout in seconds to wait for the next stop event. Defaults to config value.
+    pub timeout: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -31,6 +33,8 @@ pub struct StepParams {
     /// If true, only step this thread; other threads stay paused.
     #[serde(default)]
     pub single_thread: bool,
+    /// Timeout in seconds to wait for the next stop event. Defaults to config value.
+    pub timeout: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -45,6 +49,8 @@ pub enum StepGranularity {
 pub struct PauseParams {
     /// Thread ID to pause. If omitted, pauses all threads.
     pub thread_id: Option<i64>,
+    /// Timeout in seconds to wait for the stop event confirming pause. Defaults to config value.
+    pub timeout: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -145,7 +151,7 @@ impl DebugServer {
 
         // Subscribe before sending the request so we don't miss the event.
         let mut event_rx = state.event_tx.subscribe();
-        let timeout = state.config.dap_timeout_secs;
+        let timeout = params.timeout.unwrap_or(state.config.dap_timeout_secs);
 
         // Send DAP continue.
         {
@@ -211,7 +217,7 @@ impl DebugServer {
 
         // Subscribe before sending.
         let mut event_rx = state.event_tx.subscribe();
-        let timeout = state.config.dap_timeout_secs;
+        let timeout = params.timeout.unwrap_or(state.config.dap_timeout_secs);
 
         // Send DAP step request.
         {
@@ -263,7 +269,7 @@ impl DebugServer {
     /// Pause one or all threads.
     pub async fn handle_pause(&self, params: PauseParams) -> Result<CallToolResult, McpError> {
         let state = &self.state;
-        let timeout = state.config.dap_timeout_secs;
+        let timeout = params.timeout.unwrap_or(state.config.dap_timeout_secs);
 
         let thread_id = self
             .resolve_thread_id(params.thread_id)

@@ -39,6 +39,9 @@ pub struct EvaluateParams {
     pub expression: String,
     /// Frame ID for evaluation context. Uses top frame if omitted.
     pub frame_id: Option<i64>,
+    /// DAP evaluation context: "watch" (default), "repl", "hover", "clipboard".
+    /// Use "repl" to send raw debugger commands if the adapter supports it.
+    pub context: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -661,7 +664,7 @@ impl DebugServer {
                     Some(serde_json::json!({
                         "expression": params.expression,
                         "frameId": frame_id,
-                        "context": "watch",
+                        "context": params.context.as_deref().unwrap_or("watch"),
                     })),
                     timeout,
                 )
