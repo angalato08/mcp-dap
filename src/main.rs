@@ -10,8 +10,14 @@ use mcp_dap::config::Config;
 use mcp_dap::state::AppState;
 use mcp_dap::tools::DebugServer;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("mcp-dap {VERSION}");
+        return Ok(());
+    }
     let log_path = std::env::temp_dir().join("mcp-dap.log");
     let log_file = OpenOptions::new()
         .create(true)
@@ -52,7 +58,7 @@ async fn main() -> Result<()> {
         .with(file_layer)
         .init();
 
-    tracing::info!("mcp-dap-rs starting");
+    tracing::info!("mcp-dap {VERSION} starting");
 
     let config = Config::default();
     let state = AppState::new(config);
