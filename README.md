@@ -27,6 +27,22 @@ Additional adapters can be enabled via the `allowed_adapters` configuration opti
 
 ## Installation
 
+### Quick install (macOS / Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/angalato08/mcp-dap/main/install.sh | sh
+```
+
+To install a specific version or to a custom directory:
+
+```bash
+VERSION=0.2.0 INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/angalato08/mcp-dap/main/install.sh | sh
+```
+
+### Pre-built binaries
+
+Download a binary for your platform from the [GitHub Releases](https://github.com/angalato08/mcp-dap/releases) page.
+
 ### From source
 
 ```bash
@@ -34,10 +50,6 @@ git clone https://github.com/angalato08/mcp-dap.git
 cd mcp-dap
 cargo install --path .
 ```
-
-### Pre-built binaries
-
-Download a binary for your platform from the [GitHub Releases](https://github.com/angalato08/mcp-dap/releases) page.
 
 ## Configuration
 
@@ -83,7 +95,7 @@ Download a binary for your platform from the [GitHub Releases](https://github.co
 {
   "mcpServers": {
     "mcp-dap": {
-      "command": "mcp-dap-rs",
+      "command": "mcp-dap",
       "args": []
     }
   }
@@ -96,7 +108,7 @@ Download a binary for your platform from the [GitHub Releases](https://github.co
 {
   "mcpServers": {
     "mcp-dap": {
-      "command": "mcp-dap-rs",
+      "command": "mcp-dap",
       "args": []
     }
   }
@@ -128,7 +140,7 @@ Download a binary for your platform from the [GitHub Releases](https://github.co
                v  MCP Protocol (stdio)
                |
 +------------------------------+
-|         mcp-dap-rs           |
+|           mcp-dap             |
 |                              |
 |  +------------------------+  |
 |  |   MCP Tool Handlers    |  |

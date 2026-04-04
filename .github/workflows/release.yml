@@ -58,28 +58,28 @@ jobs:
       - name: Rename binary (unix)
         if: runner.os != 'Windows'
         run: |
-          cp target/${{ matrix.target }}/release/mcp-dap-rs \
-             mcp-dap-rs-${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/mcp-dap \
+             mcp-dap-${{ matrix.target }}
 
       - name: Rename binary (windows)
         if: runner.os == 'Windows'
         run: |
-          cp target/${{ matrix.target }}/release/mcp-dap-rs.exe `
-             mcp-dap-rs-${{ matrix.target }}.exe
+          cp target/${{ matrix.target }}/release/mcp-dap.exe `
+             mcp-dap-${{ matrix.target }}.exe
 
       - name: Upload artifact (unix)
         if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: mcp-dap-rs-${{ matrix.target }}
-          path: mcp-dap-rs-${{ matrix.target }}
+          name: mcp-dap-${{ matrix.target }}
+          path: mcp-dap-${{ matrix.target }}
 
       - name: Upload artifact (windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: mcp-dap-rs-${{ matrix.target }}
-          path: mcp-dap-rs-${{ matrix.target }}.exe
+          name: mcp-dap-${{ matrix.target }}
+          path: mcp-dap-${{ matrix.target }}.exe
 
   release:
     name: Create Release
