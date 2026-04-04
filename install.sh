@@ -10,7 +10,7 @@ main() {
     arch="$(uname -m)"
 
     case "$platform" in
-        Linux)  os="unknown-linux-gnu" ;;
+        Linux)  os="unknown-linux-musl" ;;
         Darwin) os="apple-darwin" ;;
         *)      err "Unsupported platform: $platform" ;;
     esac
