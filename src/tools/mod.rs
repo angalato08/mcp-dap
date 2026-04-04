@@ -206,6 +206,37 @@ impl DebugServer {
 #[tool_handler]
 impl ServerHandler for DebugServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build(),
+        )
+        .with_instructions(concat!(
+            "mcp-dap bridges AI agents to debug adapters via the Debug Adapter Protocol (DAP).\n",
+            "\n",
+            "## Debugging workflow\n",
+            "\n",
+            "Tools must be called in this order — each step requires the previous one:\n",
+            "\n",
+            "1. `debug_launch` (or `debug_attach`) — start a session\n",
+            "2. `debug_set_breakpoint` — set breakpoints at file:line locations\n",
+            "3. `debug_continue` — run until a breakpoint hits or the program exits\n",
+            "4. Inspect stopped state:\n",
+            "   - `debug_get_stack` — view the call stack with source context\n",
+            "   - `debug_evaluate` — evaluate expressions or read variables\n",
+            "   - `debug_threads` — list all threads\n",
+            "5. `debug_step` — step in/out/over, then inspect again\n",
+            "6. `debug_continue` — resume to next breakpoint (repeat 3-5)\n",
+            "7. `debug_disconnect` — end session and clean up\n",
+            "\n",
+            "## Key constraints\n",
+            "\n",
+            "- Only one debug session can be active at a time.\n",
+            "- `debug_continue` and `debug_step` require the session to be in the Stopped phase.\n",
+            "- `debug_pause` requires the session to be Running.\n",
+            "- Large results are automatically truncated; use `debug_get_page` with the returned pagination token to fetch more.\n",
+            "- `debug_remove_breakpoint` can be called at any point during an active session.\n",
+        ))
     }
 }

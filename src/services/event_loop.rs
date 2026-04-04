@@ -6,6 +6,7 @@ use tracing::{debug, error, instrument, warn};
 
 use crate::context::sanitize::sanitize_debuggee_output;
 use crate::dap::client::{DapReader, DapWriter, PendingMap};
+use crate::dap::state_machine::{SessionPhase, SessionState};
 use crate::dap::types::DapEvent;
 
 /// Read DAP messages from adapter.
@@ -19,6 +20,7 @@ pub async fn run_event_loop(
     pending: PendingMap,
     event_tx: broadcast::Sender<DapEvent>,
     writer: Arc<Mutex<DapWriter>>,
+    session: Arc<Mutex<SessionState>>,
 ) {
     let mut reader = reader;
 
@@ -106,10 +108,25 @@ pub async fn run_event_loop(
                     }
                 };
 
-                if let Some(event) = event
-                    && event_tx.send(event).is_err()
-                {
-                    debug!("no event subscribers");
+                if let Some(event) = event {
+                    // Centralized state transitions based on adapter events.
+                    let phase = match &event {
+                        DapEvent::Stopped { .. } => Some(SessionPhase::Stopped),
+                        DapEvent::Continued { .. } => Some(SessionPhase::Running),
+                        DapEvent::Exited { .. } | DapEvent::Terminated => {
+                            Some(SessionPhase::Terminated)
+                        }
+                        DapEvent::Initialized => Some(SessionPhase::Running),
+                        _ => None,
+                    };
+
+                    if let Some(p) = phase {
+                        let _ = session.lock().await.transition(p);
+                    }
+
+                    if event_tx.send(event).is_err() {
+                        debug!("no event subscribers");
+                    }
                 }
             }
             "request" => {

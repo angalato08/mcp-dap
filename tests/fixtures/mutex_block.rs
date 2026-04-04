@@ -4,7 +4,7 @@ use std::time::Duration;
 
 fn main() {
     let table = Arc::new(Mutex::new(0));
-    
+
     // Thread 1 locks and holds it forever
     let table_clone = Arc::clone(&table);
     thread::spawn(move || {

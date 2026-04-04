@@ -330,8 +330,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcp-dap-rs"
-version = "0.1.0"
+name = "mcp-dap"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",

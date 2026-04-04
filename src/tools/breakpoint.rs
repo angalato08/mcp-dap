@@ -50,28 +50,30 @@ impl DebugServer {
 
         // Add to the per-file breakpoint tracker.
         {
-            let mut bps = state.breakpoints.lock().await;
+            let guard = state.require_session().await.map_err(McpError::from)?;
+            let mut bps = guard.as_ref().unwrap().breakpoints.lock().await;
             bps.entry(params.file.clone()).or_default().push(bp);
         }
 
         // Send the full list for this file.
-        let breakpoints = state.breakpoints.lock().await;
-        let file_bps = breakpoints.get(&params.file).unwrap();
-        let dap_bps: Vec<serde_json::Value> = file_bps
-            .iter()
-            .map(|b| {
-                let mut v = serde_json::json!({ "line": b.line });
-                if let Some(cond) = &b.condition {
-                    v["condition"] = serde_json::json!(cond);
-                }
-                v
-            })
-            .collect();
-
         let body = {
-            let guard = state.require_client().await.map_err(McpError::from)?;
-            let client = guard.as_ref().unwrap();
-            client
+            let guard = state.require_session().await.map_err(McpError::from)?;
+            let active = guard.as_ref().unwrap();
+            let breakpoints = active.breakpoints.lock().await;
+            let file_bps = breakpoints.get(&params.file).unwrap();
+            let dap_bps: Vec<serde_json::Value> = file_bps
+                .iter()
+                .map(|b| {
+                    let mut v = serde_json::json!({ "line": b.line });
+                    if let Some(cond) = &b.condition {
+                        v["condition"] = serde_json::json!(cond);
+                    }
+                    v
+                })
+                .collect();
+
+            active
+                .client
                 .send_request_with_timeout(
                     "setBreakpoints",
                     Some(serde_json::json!({
@@ -131,7 +133,9 @@ impl DebugServer {
         let timeout = state.config.dap_timeout_secs;
 
         let remaining = {
-            let mut bps = state.breakpoints.lock().await;
+            let guard = state.require_session().await.map_err(McpError::from)?;
+            let active = guard.as_ref().unwrap();
+            let mut bps = active.breakpoints.lock().await;
             let Some(file_bps) = bps.get_mut(&params.file) else {
                 return Ok(CallToolResult::success(vec![Content::text(format!(
                     "No breakpoint at {}:{}",
@@ -161,21 +165,18 @@ impl DebugServer {
                 })
                 .collect();
 
-            {
-                let guard = state.require_client().await.map_err(McpError::from)?;
-                let client = guard.as_ref().unwrap();
-                client
-                    .send_request_with_timeout(
-                        "setBreakpoints",
-                        Some(serde_json::json!({
-                            "source": { "path": params.file },
-                            "breakpoints": dap_bps,
-                        })),
-                        timeout,
-                    )
-                    .await
-                    .map_err(McpError::from)?;
-            }
+            active
+                .client
+                .send_request_with_timeout(
+                    "setBreakpoints",
+                    Some(serde_json::json!({
+                        "source": { "path": params.file },
+                        "breakpoints": dap_bps,
+                    })),
+                    timeout,
+                )
+                .await
+                .map_err(McpError::from)?;
 
             if file_bps.is_empty() {
                 bps.remove(&params.file);

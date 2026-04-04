@@ -169,8 +169,8 @@ impl DebugServer {
         let thread_id = self.resolve_thread_id(None).await?;
         let timeout = self.state.config.dap_timeout_secs;
 
-        let guard = self.state.require_client().await?;
-        let client = guard.as_ref().unwrap();
+        let guard = self.state.require_session().await?;
+        let client = &guard.as_ref().unwrap().client;
         let body = client
             .send_request_with_timeout(
                 "stackTrace",
@@ -211,8 +211,8 @@ impl DebugServer {
         let max_var_len = state.config.max_variable_length;
 
         let body = {
-            let guard = state.require_client().await?;
-            let client = guard.as_ref().unwrap();
+            let guard = state.require_session().await?;
+            let client = &guard.as_ref().unwrap().client;
             client
                 .send_request_with_timeout(
                     "variables",
@@ -319,8 +319,8 @@ impl DebugServer {
         let context_lines = state.config.source_context_lines;
 
         let body = {
-            let guard = state.require_client().await?;
-            let client = guard.as_ref().unwrap();
+            let guard = state.require_session().await?;
+            let client = &guard.as_ref().unwrap().client;
             client
                 .send_request_with_timeout(
                     "stackTrace",
@@ -428,8 +428,8 @@ impl DebugServer {
 
         // Fetch scopes for this frame.
         let scopes_body = match async {
-            let guard = state.require_client().await?;
-            let client = guard.as_ref().unwrap();
+            let guard = state.require_session().await?;
+            let client = &guard.as_ref().unwrap().client;
             client
                 .send_request_with_timeout(
                     "scopes",
@@ -471,8 +471,8 @@ impl DebugServer {
 
             // Fetch variables for this scope.
             let vars_body = match async {
-                let guard = state.require_client().await?;
-                let client = guard.as_ref().unwrap();
+                let guard = state.require_session().await?;
+                let client = &guard.as_ref().unwrap().client;
                 client
                     .send_request_with_timeout(
                         "variables",
@@ -656,8 +656,8 @@ impl DebugServer {
             .map_err(McpError::from)?;
 
         let body = {
-            let guard = state.require_client().await.map_err(McpError::from)?;
-            let client = guard.as_ref().unwrap();
+            let guard = state.require_session().await.map_err(McpError::from)?;
+            let client = &guard.as_ref().unwrap().client;
             client
                 .send_request_with_timeout(
                     "evaluate",

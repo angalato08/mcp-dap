@@ -5,14 +5,14 @@
 
 use std::path::PathBuf;
 
-use mcp_dap_rs::tools::launch::AdapterTransport;
+use mcp_dap::tools::launch::AdapterTransport;
 
 const CODELLDB_PATH: &str = "/tmp/codelldb/extension/adapter/codelldb";
 const DLV_PATH: &str = "/home/angalato/go/bin/dlv";
 
-use mcp_dap_rs::config::Config;
-use mcp_dap_rs::state::AppState;
-use mcp_dap_rs::tools::DebugServer;
+use mcp_dap::config::Config;
+use mcp_dap::state::AppState;
+use mcp_dap::tools::DebugServer;
 
 fn fixture_path(name: &str) -> String {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -36,7 +36,7 @@ async fn test_debugpy_step_through_loop() {
 
     // 1. Launch
     let result = server
-        .handle_launch(mcp_dap_rs::tools::launch::LaunchParams {
+        .handle_launch(mcp_dap::tools::launch::LaunchParams {
             adapter_path: "python3".into(),
             adapter_args: vec!["-m".into(), "debugpy.adapter".into()],
             program: loop_py.clone(),
@@ -54,7 +54,7 @@ async fn test_debugpy_step_through_loop() {
 
     // 2. Set breakpoint at line 6 (total += i)
     let result = server
-        .handle_set_breakpoint(mcp_dap_rs::tools::breakpoint::SetBreakpointParams {
+        .handle_set_breakpoint(mcp_dap::tools::breakpoint::SetBreakpointParams {
             file: loop_py.clone(),
             line: 6,
             condition: None,
@@ -66,9 +66,10 @@ async fn test_debugpy_step_through_loop() {
 
     // 3. Continue to breakpoint
     let result = server
-        .handle_continue(mcp_dap_rs::tools::execution::ContinueParams {
+        .handle_continue(mcp_dap::tools::execution::ContinueParams {
             thread_id: None,
             single_thread: false,
+            timeout: None,
         })
         .await
         .expect("continue should succeed");
@@ -77,9 +78,10 @@ async fn test_debugpy_step_through_loop() {
 
     // 4. Evaluate `i`
     let result = server
-        .handle_evaluate(mcp_dap_rs::tools::inspect::EvaluateParams {
+        .handle_evaluate(mcp_dap::tools::inspect::EvaluateParams {
             expression: "i".into(),
             frame_id: None,
+            context: None,
         })
         .await
         .expect("evaluate should succeed");
@@ -88,7 +90,7 @@ async fn test_debugpy_step_through_loop() {
 
     // 5. Get stack
     let result = server
-        .handle_get_stack(mcp_dap_rs::tools::inspect::GetStackParams {
+        .handle_get_stack(mcp_dap::tools::inspect::GetStackParams {
             thread_id: None,
             max_frames: 10,
         })
@@ -99,10 +101,11 @@ async fn test_debugpy_step_through_loop() {
 
     // 6. Step over
     let result = server
-        .handle_step(mcp_dap_rs::tools::execution::StepParams {
-            granularity: mcp_dap_rs::tools::execution::StepGranularity::Over,
+        .handle_step(mcp_dap::tools::execution::StepParams {
+            granularity: mcp_dap::tools::execution::StepGranularity::Over,
             thread_id: None,
             single_thread: false,
+            timeout: None,
         })
         .await
         .expect("step should succeed");
@@ -134,7 +137,7 @@ async fn test_codelldb_launch_and_inspect() {
 
     // 1. Launch with stop_on_entry
     let result = server
-        .handle_launch(mcp_dap_rs::tools::launch::LaunchParams {
+        .handle_launch(mcp_dap::tools::launch::LaunchParams {
             adapter_path: CODELLDB_PATH.into(),
             adapter_args: vec![],
             program: program.clone(),
@@ -151,7 +154,7 @@ async fn test_codelldb_launch_and_inspect() {
 
     // 2. Get stack at entry point
     let result = server
-        .handle_get_stack(mcp_dap_rs::tools::inspect::GetStackParams {
+        .handle_get_stack(mcp_dap::tools::inspect::GetStackParams {
             thread_id: None,
             max_frames: 10,
         })
@@ -164,7 +167,7 @@ async fn test_codelldb_launch_and_inspect() {
     let mut main_rs = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     main_rs.push("src/main.rs");
     let result = server
-        .handle_set_breakpoint(mcp_dap_rs::tools::breakpoint::SetBreakpointParams {
+        .handle_set_breakpoint(mcp_dap::tools::breakpoint::SetBreakpointParams {
             file: main_rs.to_string_lossy().to_string(),
             line: 18, // `let config = Config::default();`
             condition: None,
@@ -176,9 +179,10 @@ async fn test_codelldb_launch_and_inspect() {
 
     // 4. Continue to breakpoint in main
     let result = server
-        .handle_continue(mcp_dap_rs::tools::execution::ContinueParams {
+        .handle_continue(mcp_dap::tools::execution::ContinueParams {
             thread_id: None,
             single_thread: false,
+            timeout: None,
         })
         .await
         .expect("continue should succeed");
@@ -187,7 +191,7 @@ async fn test_codelldb_launch_and_inspect() {
 
     // 5. Stack should now show main
     let result = server
-        .handle_get_stack(mcp_dap_rs::tools::inspect::GetStackParams {
+        .handle_get_stack(mcp_dap::tools::inspect::GetStackParams {
             thread_id: None,
             max_frames: 10,
         })
@@ -201,9 +205,10 @@ async fn test_codelldb_launch_and_inspect() {
 
     // 6. Evaluate an expression
     let result = server
-        .handle_evaluate(mcp_dap_rs::tools::inspect::EvaluateParams {
+        .handle_evaluate(mcp_dap::tools::inspect::EvaluateParams {
             expression: "1 + 1".into(),
             frame_id: None,
+            context: None,
         })
         .await
         .expect("evaluate should succeed");
@@ -215,10 +220,11 @@ async fn test_codelldb_launch_and_inspect() {
 
     // 7. Step over
     let result = server
-        .handle_step(mcp_dap_rs::tools::execution::StepParams {
-            granularity: mcp_dap_rs::tools::execution::StepGranularity::Over,
+        .handle_step(mcp_dap::tools::execution::StepParams {
+            granularity: mcp_dap::tools::execution::StepGranularity::Over,
             thread_id: None,
             single_thread: false,
+            timeout: None,
         })
         .await
         .expect("step should succeed");
@@ -241,7 +247,7 @@ async fn test_codelldb_launch_and_inspect() {
 #[tokio::test]
 #[ignore = "requires delve: go install github.com/go-delve/delve/cmd/dlv@latest"]
 async fn test_delve_step_through_loop() {
-    use mcp_dap_rs::tools::launch::AdapterTransport;
+    use mcp_dap::tools::launch::AdapterTransport;
 
     let server = make_server();
     let loop_go = fixture_path("loop.go");
@@ -249,7 +255,7 @@ async fn test_delve_step_through_loop() {
 
     // 1. Launch with TCP transport (delve DAP mode)
     let result = server
-        .handle_launch(mcp_dap_rs::tools::launch::LaunchParams {
+        .handle_launch(mcp_dap::tools::launch::LaunchParams {
             adapter_path: DLV_PATH.into(),
             adapter_args: vec!["dap".into()],
             program: loop_go_bin.clone(),
@@ -266,7 +272,7 @@ async fn test_delve_step_through_loop() {
 
     // 2. Set breakpoint at line 9 (total += i)
     let result = server
-        .handle_set_breakpoint(mcp_dap_rs::tools::breakpoint::SetBreakpointParams {
+        .handle_set_breakpoint(mcp_dap::tools::breakpoint::SetBreakpointParams {
             file: loop_go.clone(),
             line: 9,
             condition: None,
@@ -278,9 +284,10 @@ async fn test_delve_step_through_loop() {
 
     // 3. Continue to breakpoint
     let result = server
-        .handle_continue(mcp_dap_rs::tools::execution::ContinueParams {
+        .handle_continue(mcp_dap::tools::execution::ContinueParams {
             thread_id: None,
             single_thread: false,
+            timeout: None,
         })
         .await
         .expect("continue should succeed");
@@ -289,9 +296,10 @@ async fn test_delve_step_through_loop() {
 
     // 4. Evaluate `i`
     let result = server
-        .handle_evaluate(mcp_dap_rs::tools::inspect::EvaluateParams {
+        .handle_evaluate(mcp_dap::tools::inspect::EvaluateParams {
             expression: "i".into(),
             frame_id: None,
+            context: None,
         })
         .await
         .expect("evaluate should succeed");
@@ -300,7 +308,7 @@ async fn test_delve_step_through_loop() {
 
     // 5. Get stack
     let result = server
-        .handle_get_stack(mcp_dap_rs::tools::inspect::GetStackParams {
+        .handle_get_stack(mcp_dap::tools::inspect::GetStackParams {
             thread_id: None,
             max_frames: 10,
         })
@@ -311,10 +319,11 @@ async fn test_delve_step_through_loop() {
 
     // 6. Step over
     let result = server
-        .handle_step(mcp_dap_rs::tools::execution::StepParams {
-            granularity: mcp_dap_rs::tools::execution::StepGranularity::Over,
+        .handle_step(mcp_dap::tools::execution::StepParams {
+            granularity: mcp_dap::tools::execution::StepGranularity::Over,
             thread_id: None,
             single_thread: false,
+            timeout: None,
         })
         .await
         .expect("step should succeed");
@@ -340,7 +349,7 @@ async fn test_launch_bad_adapter_cleans_up() {
     let server = make_server();
 
     let result = server
-        .handle_launch(mcp_dap_rs::tools::launch::LaunchParams {
+        .handle_launch(mcp_dap::tools::launch::LaunchParams {
             adapter_path: "/nonexistent/codelldb".into(),
             adapter_args: vec![],
             program: "/tmp/doesnotexist".into(),
@@ -356,7 +365,7 @@ async fn test_launch_bad_adapter_cleans_up() {
 
     // State should be reset — a new launch should not get "session active" error.
     let result = server
-        .handle_launch(mcp_dap_rs::tools::launch::LaunchParams {
+        .handle_launch(mcp_dap::tools::launch::LaunchParams {
             adapter_path: "/nonexistent/dlv".into(),
             adapter_args: vec![],
             program: "/tmp/doesnotexist".into(),
@@ -381,7 +390,7 @@ async fn test_launch_bad_adapter_cleans_up() {
 #[tokio::test]
 #[ignore = "requires codelldb adapter"]
 async fn test_adapter_crash_recovery() {
-    use mcp_dap_rs::dap::state_machine::SessionPhase;
+    use mcp_dap::dap::state_machine::SessionPhase;
 
     let server = make_server();
 
@@ -391,7 +400,7 @@ async fn test_adapter_crash_recovery() {
 
     // Launch successfully
     let result = server
-        .handle_launch(mcp_dap_rs::tools::launch::LaunchParams {
+        .handle_launch(mcp_dap::tools::launch::LaunchParams {
             adapter_path: CODELLDB_PATH.into(),
             adapter_args: vec![],
             program,
@@ -408,9 +417,9 @@ async fn test_adapter_crash_recovery() {
 
     // Force-kill the adapter process to simulate a crash
     {
-        let guard = server.state.dap_client.lock().await;
-        if let Some(client) = guard.as_ref()
-            && let Some(child) = client.child.lock().await.as_mut()
+        let guard = server.state.active_session.lock().await;
+        if let Some(session) = guard.as_ref()
+            && let Some(child) = session.client.child.lock().await.as_mut()
         {
             child.kill().await.expect("kill adapter");
         }
@@ -420,7 +429,13 @@ async fn test_adapter_crash_recovery() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // State should be cleaned up — session phase should be Uninitialized
-    let phase = server.state.session.lock().await.phase();
+    let phase = {
+        let guard = server.state.active_session.lock().await;
+        match guard.as_ref() {
+            Some(s) => s.session.lock().await.phase(),
+            None => SessionPhase::Uninitialized,
+        }
+    };
     assert_eq!(
         phase,
         SessionPhase::Uninitialized,
@@ -429,15 +444,15 @@ async fn test_adapter_crash_recovery() {
 
     // Client should be cleared
     assert!(
-        server.state.dap_client.lock().await.is_none(),
+        server.state.active_session.lock().await.is_none(),
         "client should be cleared after crash"
     );
 
     // A new launch should work (no "session active" error)
-    // Just verify require_no_client passes
+    // Just verify require_no_session passes
     server
         .state
-        .require_no_client()
+        .require_no_session()
         .await
         .expect("should be able to start a new session after crash");
 }

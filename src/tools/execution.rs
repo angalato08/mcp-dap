@@ -1,5 +1,4 @@
 use std::fmt::Write;
-use std::time::Duration;
 
 use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
@@ -63,7 +62,7 @@ impl DebugServer {
         event: &DapEvent,
         action_label: &str,
     ) -> Result<CallToolResult, McpError> {
-        let state = &self.state;
+        let _state = &self.state;
 
         match event {
             DapEvent::Stopped {
@@ -71,12 +70,6 @@ impl DebugServer {
                 reason,
                 all_threads_stopped,
             } => {
-                state
-                    .session
-                    .lock()
-                    .await
-                    .transition(SessionPhase::Stopped)
-                    .map_err(McpError::from)?;
                 let scope = if *all_threads_stopped {
                     ", all threads stopped"
                 } else {
@@ -86,28 +79,12 @@ impl DebugServer {
                 let rich = self.build_stopped_auto_context(*thread_id, &header).await;
                 Ok(CallToolResult::success(vec![Content::text(rich)]))
             }
-            DapEvent::Exited { exit_code } => {
-                state
-                    .session
-                    .lock()
-                    .await
-                    .transition(SessionPhase::Terminated)
-                    .map_err(McpError::from)?;
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Process exited with code {exit_code}"
-                ))]))
-            }
-            DapEvent::Terminated => {
-                state
-                    .session
-                    .lock()
-                    .await
-                    .transition(SessionPhase::Terminated)
-                    .map_err(McpError::from)?;
-                Ok(CallToolResult::success(vec![Content::text(
-                    "Debug session terminated".to_string(),
-                )]))
-            }
+            DapEvent::Exited { exit_code } => Ok(CallToolResult::success(vec![Content::text(
+                format!("Process exited with code {exit_code}"),
+            )])),
+            DapEvent::Terminated => Ok(CallToolResult::success(vec![Content::text(
+                "Debug session terminated".to_string(),
+            )])),
             _ => unreachable!(),
         }
     }
@@ -119,8 +96,8 @@ impl DebugServer {
         }
 
         let timeout = self.state.config.dap_timeout_secs;
-        let guard = self.state.require_client().await?;
-        let client = guard.as_ref().unwrap();
+        let guard = self.state.require_session().await?;
+        let client = &guard.as_ref().unwrap().client;
         let body = client
             .send_request_with_timeout("threads", None, timeout)
             .await?;
@@ -149,8 +126,6 @@ impl DebugServer {
             .await
             .map_err(McpError::from)?;
 
-        // Subscribe before sending the request so we don't miss the event.
-        let mut event_rx = state.event_tx.subscribe();
         let timeout = params.timeout.unwrap_or(state.config.dap_timeout_secs);
 
         // Send DAP continue.
@@ -160,8 +135,8 @@ impl DebugServer {
                 args["singleThread"] = serde_json::json!(true);
             }
 
-            let guard = state.require_client().await.map_err(McpError::from)?;
-            let client = guard.as_ref().unwrap();
+            let guard = state.require_session().await.map_err(McpError::from)?;
+            let client = &guard.as_ref().unwrap().client;
             client
                 .send_request_with_timeout("continue", Some(args), timeout)
                 .await
@@ -169,32 +144,28 @@ impl DebugServer {
         }
 
         // Transition Stopped -> Running.
-        state
-            .session
-            .lock()
-            .await
-            .transition(SessionPhase::Running)
-            .map_err(McpError::from)?;
+        {
+            let guard = state.require_session().await.map_err(McpError::from)?;
+            guard
+                .as_ref()
+                .unwrap()
+                .session
+                .lock()
+                .await
+                .transition(SessionPhase::Running)
+                .map_err(McpError::from)?;
+        }
 
-        // Wait for stop/terminate/exit event.
-        let event = tokio::time::timeout(Duration::from_secs(timeout), async {
-            loop {
-                match event_rx.recv().await {
-                    Ok(
-                        ev @ (DapEvent::Stopped { .. }
-                        | DapEvent::Terminated
-                        | DapEvent::Exited { .. }),
-                    ) => return Ok(ev),
-                    Ok(_) => {}
-                    Err(e) => {
-                        return Err(AppError::DapError(format!("event channel error: {e}")));
-                    }
-                }
-            }
-        })
-        .await
-        .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
-        .map_err(McpError::from)?;
+        // Wait for stop/terminate/exit event using the new utility.
+        let event = state
+            .wait_for_event(timeout, |ev| {
+                matches!(
+                    ev,
+                    DapEvent::Stopped { .. } | DapEvent::Terminated | DapEvent::Exited { .. }
+                )
+            })
+            .await
+            .map_err(McpError::from)?;
 
         self.handle_stopped_event(&event, "Stopped").await
     }
@@ -215,8 +186,6 @@ impl DebugServer {
             StepGranularity::Out => "stepOut",
         };
 
-        // Subscribe before sending.
-        let mut event_rx = state.event_tx.subscribe();
         let timeout = params.timeout.unwrap_or(state.config.dap_timeout_secs);
 
         // Send DAP step request.
@@ -226,8 +195,8 @@ impl DebugServer {
                 args["singleThread"] = serde_json::json!(true);
             }
 
-            let guard = state.require_client().await.map_err(McpError::from)?;
-            let client = guard.as_ref().unwrap();
+            let guard = state.require_session().await.map_err(McpError::from)?;
+            let client = &guard.as_ref().unwrap().client;
             client
                 .send_request_with_timeout(command, Some(args), timeout)
                 .await
@@ -235,32 +204,28 @@ impl DebugServer {
         }
 
         // Transition Stopped -> Running.
-        state
-            .session
-            .lock()
-            .await
-            .transition(SessionPhase::Running)
-            .map_err(McpError::from)?;
+        {
+            let guard = state.require_session().await.map_err(McpError::from)?;
+            guard
+                .as_ref()
+                .unwrap()
+                .session
+                .lock()
+                .await
+                .transition(SessionPhase::Running)
+                .map_err(McpError::from)?;
+        }
 
-        // Wait for stopped event.
-        let event = tokio::time::timeout(Duration::from_secs(timeout), async {
-            loop {
-                match event_rx.recv().await {
-                    Ok(
-                        ev @ (DapEvent::Stopped { .. }
-                        | DapEvent::Terminated
-                        | DapEvent::Exited { .. }),
-                    ) => return Ok(ev),
-                    Ok(_) => {}
-                    Err(e) => {
-                        return Err(AppError::DapError(format!("event channel error: {e}")));
-                    }
-                }
-            }
-        })
-        .await
-        .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
-        .map_err(McpError::from)?;
+        // Wait for stopped event using the new utility.
+        let event = state
+            .wait_for_event(timeout, |ev| {
+                matches!(
+                    ev,
+                    DapEvent::Stopped { .. } | DapEvent::Terminated | DapEvent::Exited { .. }
+                )
+            })
+            .await
+            .map_err(McpError::from)?;
 
         self.handle_stopped_event(&event, &format!("Stepped ({command})"))
             .await
@@ -277,8 +242,8 @@ impl DebugServer {
             .map_err(McpError::from)?;
 
         {
-            let guard = state.require_client().await.map_err(McpError::from)?;
-            let client = guard.as_ref().unwrap();
+            let guard = state.require_session().await.map_err(McpError::from)?;
+            let client = &guard.as_ref().unwrap().client;
             client
                 .send_request_with_timeout(
                     "pause",
@@ -289,25 +254,11 @@ impl DebugServer {
                 .map_err(McpError::from)?;
         }
 
-        // Wait for the stopped event confirming the pause.
-        let mut event_rx = state.event_tx.subscribe();
-        let event = tokio::time::timeout(Duration::from_secs(timeout), async {
-            loop {
-                match event_rx.recv().await {
-                    Ok(ev @ DapEvent::Stopped { .. }) => return Ok(ev),
-                    Ok(DapEvent::Terminated | DapEvent::AdapterCrashed) => {
-                        return Err(AppError::DapError("session ended during pause".into()));
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        return Err(AppError::DapError(format!("event channel error: {e}")));
-                    }
-                }
-            }
-        })
-        .await
-        .map_err(|_| McpError::from(AppError::DapTimeout(timeout)))?
-        .map_err(McpError::from)?;
+        // Wait for the stopped event confirming the pause using the new utility.
+        let event = state
+            .wait_for_event(timeout, |ev| matches!(ev, DapEvent::Stopped { .. }))
+            .await
+            .map_err(McpError::from)?;
 
         self.handle_stopped_event(&event, "Paused").await
     }
@@ -318,8 +269,8 @@ impl DebugServer {
         let timeout = state.config.dap_timeout_secs;
 
         let body = {
-            let guard = state.require_client().await.map_err(McpError::from)?;
-            let client = guard.as_ref().unwrap();
+            let guard = state.require_session().await.map_err(McpError::from)?;
+            let client = &guard.as_ref().unwrap().client;
             client
                 .send_request_with_timeout("threads", None, timeout)
                 .await

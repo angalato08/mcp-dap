@@ -11,17 +11,23 @@ use crate::dap::types::DapEvent;
 use crate::error::AppError;
 use crate::tools::breakpoint::TrackedBreakpoint;
 
+/// State specifically tied to an active debug session.
+/// Grouping these ensures atomic cleanup by dropping the whole session object.
+pub struct ActiveSession {
+    pub client: DapClient,
+    pub session: Arc<Mutex<SessionState>>,
+    /// Tracks breakpoints per file for DAP's replace-all setBreakpoints semantics.
+    pub breakpoints: Mutex<HashMap<String, Vec<TrackedBreakpoint>>>,
+    /// Adapter capabilities from the last `initialize` response.
+    pub capabilities: Mutex<Option<serde_json::Value>>,
+}
+
 /// Shared application state, wrapped in `Arc` for concurrent access.
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub dap_client: Arc<Mutex<Option<DapClient>>>,
-    pub session: Arc<Mutex<SessionState>>,
+    pub active_session: Arc<Mutex<Option<ActiveSession>>>,
     pub event_tx: broadcast::Sender<DapEvent>,
-    /// Tracks breakpoints per file for DAP's replace-all setBreakpoints semantics.
-    pub breakpoints: Arc<Mutex<HashMap<String, Vec<TrackedBreakpoint>>>>,
-    /// Adapter capabilities from the last `initialize` response.
-    pub capabilities: Arc<Mutex<Option<serde_json::Value>>>,
     /// Cache for paginating large debug evaluation results.
     pub pagination_cache: Arc<Mutex<PaginationCache>>,
 }
@@ -35,19 +41,26 @@ impl AppState {
         );
         Self {
             config: Arc::new(config),
-            dap_client: Arc::new(Mutex::new(None)),
-            session: Arc::new(Mutex::new(SessionState::new())),
+            active_session: Arc::new(Mutex::new(None)),
             event_tx,
-            breakpoints: Arc::new(Mutex::new(HashMap::new())),
-            capabilities: Arc::new(Mutex::new(None)),
             pagination_cache: Arc::new(Mutex::new(pagination_cache)),
         }
     }
 
     /// Assert that the session is in one of the allowed phases.
     pub async fn require_phase(&self, allowed: &[SessionPhase]) -> Result<(), AppError> {
-        let session = self.session.lock().await;
-        let current = session.phase();
+        let guard = self.active_session.lock().await;
+        let session_guard = match guard.as_ref() {
+            Some(s) => s.session.lock().await,
+            None => {
+                // If no session exists, treat it as disconnected/none.
+                // If "none" is allowed, this might be fine.
+                // But usually tools require an active session.
+                return Err(AppError::NoSession);
+            }
+        };
+
+        let current = session_guard.phase();
         if allowed.contains(&current) {
             Ok(())
         } else {
@@ -58,9 +71,9 @@ impl AppState {
         }
     }
 
-    /// Lock the DAP client, returning an error if no session is active.
-    pub async fn require_client(&self) -> Result<MutexGuard<'_, Option<DapClient>>, AppError> {
-        let guard = self.dap_client.lock().await;
+    /// Lock the active session, returning an error if no session is active.
+    pub async fn require_session(&self) -> Result<MutexGuard<'_, Option<ActiveSession>>, AppError> {
+        let guard = self.active_session.lock().await;
         if guard.is_none() {
             return Err(AppError::NoSession);
         }
@@ -68,13 +81,44 @@ impl AppState {
     }
 
     /// Assert that no session is currently active.
-    pub async fn require_no_client(&self) -> Result<(), AppError> {
-        let guard = self.dap_client.lock().await;
+    pub async fn require_no_session(&self) -> Result<(), AppError> {
+        let guard = self.active_session.lock().await;
         if guard.is_some() {
             return Err(AppError::SessionActive);
         }
         drop(guard);
         Ok(())
+    }
+
+    /// Wait for a specific DAP event using a provided matcher function, with a timeout.
+    pub async fn wait_for_event<F>(
+        &self,
+        timeout_secs: u64,
+        mut matcher: F,
+    ) -> Result<DapEvent, AppError>
+    where
+        F: FnMut(&DapEvent) -> bool,
+    {
+        let mut rx = self.event_tx.subscribe();
+        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        if matcher(&event) {
+                            return Ok(event);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return Err(AppError::DapError("event channel closed".into()));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        continue;
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| AppError::DapTimeout(timeout_secs))?
     }
 
     /// Validate that `adapter_path` is on the configured whitelist.
@@ -105,48 +149,41 @@ impl AppState {
     }
 
     /// Atomically guard against concurrent session starts.
-    /// Checks no client exists and transitions to Initializing in one critical section.
-    pub async fn try_start_session(&self) -> Result<(), AppError> {
-        let guard = self.dap_client.lock().await;
+    pub async fn try_start_session(&self, client: DapClient) -> Result<(), AppError> {
+        let mut guard = self.active_session.lock().await;
         if guard.is_some() {
             return Err(AppError::SessionActive);
         }
-        self.session
+
+        let session = ActiveSession {
+            client,
+            session: Arc::new(Mutex::new(SessionState::new())),
+            breakpoints: Mutex::new(HashMap::new()),
+            capabilities: Mutex::new(None),
+        };
+
+        session
+            .session
             .lock()
             .await
             .transition(SessionPhase::Initializing)?;
-        drop(guard);
+
+        *guard = Some(session);
         Ok(())
     }
 
     /// Force-cleanup all session state: kill adapter, reset phase, clear breakpoints.
-    /// Safe to call from any phase — used for error recovery and adapter crash handling.
     pub async fn force_cleanup(&self) {
-        // Extract child handle under lock, then release before awaiting kill/wait.
-        let child_handle = {
-            let guard = self.dap_client.lock().await;
-            if let Some(client) = guard.as_ref() {
-                client.child.lock().await.take()
-            } else {
-                None
+        let mut guard = self.active_session.lock().await;
+        if let Some(active) = guard.take() {
+            // Kill the child process if it exists.
+            let child_handle = active.client.child.lock().await.take();
+            if let Some(mut child) = child_handle {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
             }
-        };
-        // Kill/wait outside the dap_client lock to avoid blocking other tasks.
-        if let Some(mut child) = child_handle {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
         }
-        // Clear the client.
-        *self.dap_client.lock().await = None;
-        // Reset session state.
-        *self.session.lock().await = SessionState::new();
-        // Clear breakpoint tracker.
-        self.breakpoints.lock().await.clear();
-        // Clear cached capabilities.
-        *self.capabilities.lock().await = None;
-        // NOTE: pagination cache is intentionally NOT cleared here.
-        // Tokens remain valid (with their own TTL) even after the debug session ends,
-        // so the agent can still page through previously fetched results.
+        // Dropping 'active' cleans up everything else.
     }
 }
 

@@ -6,9 +6,9 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use mcp_dap_rs::config::Config;
-use mcp_dap_rs::state::AppState;
-use mcp_dap_rs::tools::DebugServer;
+use mcp_dap::config::Config;
+use mcp_dap::state::AppState;
+use mcp_dap::tools::DebugServer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
