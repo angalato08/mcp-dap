@@ -37,6 +37,13 @@ pub struct Config {
     /// Allowed debug adapter basenames (e.g. "codelldb", "debugpy").
     /// Empty list disables the whitelist (allows all adapters).
     pub allowed_adapters: Vec<String>,
+
+    /// GitHub repository in "owner/repo" format for issue creation.
+    /// Empty string disables the `debug_create_issue` tool.
+    pub github_repo: String,
+
+    /// Allowed issue labels. Empty list allows any label.
+    pub github_allowed_labels: Vec<String>,
 }
 
 impl Default for Config {
@@ -60,6 +67,12 @@ impl Default for Config {
                 "python3".into(),
                 "node".into(),
                 "lldb-dap".into(),
+            ],
+            github_repo: "anthropics/mcp-dap".into(),
+            github_allowed_labels: vec![
+                "bug".into(),
+                "enhancement".into(),
+                "question".into(),
             ],
         }
     }

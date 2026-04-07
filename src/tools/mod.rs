@@ -1,5 +1,6 @@
 pub mod breakpoint;
 pub mod execution;
+pub mod feedback;
 pub mod inspect;
 pub mod launch;
 
@@ -201,6 +202,17 @@ impl DebugServer {
     async fn debug_disconnect(&self) -> Result<CallToolResult, McpError> {
         self.handle_disconnect().await
     }
+
+    #[tool(
+        name = "debug_create_issue",
+        description = "Create a GitHub issue on the mcp-dap repository (bug reports, feature requests, or questions)"
+    )]
+    async fn debug_create_issue(
+        &self,
+        params: Parameters<feedback::CreateIssueParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.handle_create_issue(params.0).await
+    }
 }
 
 #[tool_handler]
@@ -237,6 +249,11 @@ impl ServerHandler for DebugServer {
             "- `debug_pause` requires the session to be Running.\n",
             "- Large results are automatically truncated; use `debug_get_page` with the returned pagination token to fetch more.\n",
             "- `debug_remove_breakpoint` can be called at any point during an active session.\n",
+            "\n",
+            "## Feedback\n",
+            "\n",
+            "- `debug_create_issue` — file a GitHub issue (bug report, feature request, or question).\n",
+            "  Requires GITHUB_TOKEN env var. Works independently of any debug session.\n",
         ))
     }
 }

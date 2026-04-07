@@ -35,6 +35,18 @@ pub enum AppError {
     #[error("codec error: {0}")]
     Codec(String),
 
+    #[error("GitHub API error ({status}): {message}")]
+    GitHubApi { status: u16, message: String },
+
+    #[error("GitHub token not configured (set GITHUB_TOKEN env var)")]
+    GitHubTokenMissing,
+
+    #[error("issue creation disabled (github_repo not configured)")]
+    IssueCreationDisabled,
+
+    #[error("label not allowed: {label} (allowed: {allowed})")]
+    LabelNotAllowed { label: String, allowed: String },
+
     #[error(transparent)]
     Io(#[from] io::Error),
 
@@ -53,7 +65,10 @@ impl From<AppError> for McpError {
             | AppError::InvalidState { .. }
             | AppError::UnauthorizedAdapter(..)
             | AppError::PaginationTokenNotFound(_)
-            | AppError::PaginationTokenExpired(_) => {
+            | AppError::PaginationTokenExpired(_)
+            | AppError::GitHubTokenMissing
+            | AppError::IssueCreationDisabled
+            | AppError::LabelNotAllowed { .. } => {
                 McpError::invalid_params(err.to_string(), None)
             }
             _ => McpError::internal_error(err.to_string(), None),
