@@ -68,7 +68,7 @@ impl Default for Config {
                 "node".into(),
                 "lldb-dap".into(),
             ],
-            github_repo: "anthropics/mcp-dap".into(),
+            github_repo: "angalato08/mcp-dap".into(),
             github_allowed_labels: vec![
                 "bug".into(),
                 "enhancement".into(),
