@@ -4,3 +4,5 @@
 .claude/
 .gemini/
 CLAUDE.md
+.orchestra/
+orchestra.yaml
