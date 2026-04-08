@@ -67,7 +67,9 @@ cargo install --path .
   "pagination_cache_ttl_secs": 300,
   "auto_context_max_scopes": 3,
   "auto_context_max_vars_per_scope": 20,
-  "allowed_adapters": ["codelldb", "debugpy", "dlv", "python", "python3", "node", "lldb-dap"]
+  "allowed_adapters": ["codelldb", "debugpy", "dlv", "python", "python3", "node", "lldb-dap"],
+  "github_repo": "angalato08/mcp-dap",
+  "github_allowed_labels": ["bug", "enhancement", "question"]
 }
 ```
 
@@ -84,6 +86,8 @@ cargo install --path .
 | `auto_context_max_scopes` | `3` | Maximum scopes to expand for auto-context locals (0 disables) |
 | `auto_context_max_vars_per_scope` | `20` | Maximum top-level variables per scope in auto-context output |
 | `allowed_adapters` | See above | Allowed debug adapter basenames. Empty list disables the allow-list |
+| `github_repo` | `"angalato08/mcp-dap"` | GitHub repository in `owner/repo` format for `debug_create_issue`. Empty string disables the tool |
+| `github_allowed_labels` | `["bug", "enhancement", "question"]` | Allowed issue labels. Empty list allows any label |
 
 ## Usage
 
@@ -131,6 +135,183 @@ cargo install --path .
 | `debug_threads` | List all threads in the debuggee |
 | `debug_get_page` | Fetch the next page of a truncated debug result using a pagination token |
 | `debug_disconnect` | End the debug session, terminate the debuggee, and clean up |
+| `debug_create_issue` | File a GitHub issue (bug report, feature request, or question) against the configured repo |
+
+## Quick Start Workflow
+
+Tools must be called in this order — each step requires the previous one:
+
+```
+debug_launch ──► debug_set_breakpoint ──► debug_continue ──► inspect ──► debug_disconnect
+                                               ▲                │
+                                               │                ▼
+                                               ◄── debug_step ◄─┘
+```
+
+1. **`debug_launch`** (or `debug_attach`) — start a debug session
+2. **`debug_set_breakpoint`** — set breakpoints at file:line locations
+3. **`debug_continue`** — run until a breakpoint hits or the program exits
+4. **Inspect stopped state:**
+   - `debug_get_stack` — view the call stack with source context
+   - `debug_evaluate` — evaluate expressions or read variables
+   - `debug_threads` — list all threads
+5. **`debug_step`** — step in/out/over, then inspect again
+6. **`debug_continue`** — resume to next breakpoint (repeat 3–5)
+7. **`debug_disconnect`** — end session and clean up
+
+> Only one debug session can be active at a time. Call `debug_disconnect` before starting a new one.
+
+## Example Session
+
+Debugging a Rust program that panics on a division by zero:
+
+```jsonc
+// 1. Launch the program under CodeLLDB
+debug_launch({
+  "adapter_path": "codelldb",
+  "program": "./target/debug/myapp",
+  "program_args": ["--input", "data.csv"]
+})
+// → "Session started (CodeLLDB, pid 48291)"
+
+// 2. Set a breakpoint
+debug_set_breakpoint({
+  "file": "/home/user/myapp/src/main.rs",
+  "line": 42
+})
+// → "Breakpoint set at src/main.rs:42"
+
+// 3. Run to the breakpoint
+debug_continue({})
+// → Stopped at src/main.rs:42 — shows source context + local variables
+
+// 4. Inspect a variable
+debug_evaluate({ "expression": "divisor" })
+// → "divisor = 0 (i32)"
+
+// 5. Step over to the next line
+debug_step({ "granularity": "over" })
+// → Stopped at src/main.rs:43 — shows updated source context
+
+// 6. Evaluate an expression
+debug_evaluate({ "expression": "dividend / (divisor + 1)" })
+// → "42 (i32)"
+
+// 7. Clean up
+debug_disconnect({})
+// → "Session disconnected"
+```
+
+## Debug Adapter Setup
+
+mcp-dap requires a debug adapter for each language. Install the adapter(s) you need:
+
+### CodeLLDB (Rust, C, C++)
+
+CodeLLDB is distributed as a VS Code extension. To extract the standalone adapter binary:
+
+```bash
+# Download the latest release for your platform
+# From: https://github.com/nickovs/codelldb-standalone/releases
+# Or extract from the VS Code extension:
+code --install-extension vadimcn.vscode-codelldb
+# The adapter binary is at:
+#   ~/.vscode/extensions/vadimcn.vscode-codelldb-*/adapter/codelldb
+```
+
+Add the adapter to your `PATH`, or use the full path in `adapter_path`.
+
+### debugpy (Python)
+
+```bash
+pip install debugpy
+```
+
+The adapter is invoked as `python -m debugpy.adapter`. In your `debug_launch` call:
+
+```jsonc
+debug_launch({
+  "adapter_path": "python",
+  "adapter_args": ["-m", "debugpy.adapter"],
+  "program": "my_script.py"
+})
+```
+
+### Delve (Go)
+
+```bash
+go install github.com/go-delve/delve/cmd/dlv@latest
+```
+
+Delve uses TCP transport — the adapter listens on a port and mcp-dap connects to it:
+
+```jsonc
+debug_launch({
+  "adapter_path": "dlv",
+  "adapter_args": ["dap", "--listen", "127.0.0.1:12345"],
+  "transport": {"tcp": 12345},
+  "program": "./cmd/myapp"
+})
+```
+
+## Advanced Usage
+
+### TCP Transport
+
+Some adapters (like Delve) communicate over TCP instead of stdio. Use the `transport` parameter:
+
+```jsonc
+debug_launch({
+  "adapter_path": "dlv",
+  "adapter_args": ["dap", "--listen", "127.0.0.1:12345"],
+  "transport": {"tcp": 12345},
+  "program": "./main.go"
+})
+```
+
+The adapter starts, listens on the specified port, and mcp-dap connects to it as a TCP client.
+
+### Attaching to a Running Process
+
+Use `debug_attach` to connect to an already-running process by PID:
+
+```jsonc
+debug_attach({
+  "adapter_path": "codelldb",
+  "pid": 12345
+})
+```
+
+This is useful for debugging long-running servers or processes that are hard to reproduce from a cold start. The adapter must support the DAP `attach` request (CodeLLDB and debugpy do; Delve uses a different attach flow).
+
+### Extra Launch Arguments
+
+Use `extra_launch_args` to pass adapter-specific configuration that gets merged into the DAP launch request:
+
+```jsonc
+debug_launch({
+  "adapter_path": "codelldb",
+  "program": "./target/debug/myapp",
+  "extra_launch_args": {
+    "env": {"RUST_LOG": "debug"},
+    "sourceMap": {"/build": "/src"},
+    "initCommands": ["settings set target.x86-disassembly-flavor intel"]
+  }
+})
+```
+
+The exact keys depend on the debug adapter — consult its documentation for supported options.
+
+## Troubleshooting
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `Adapter "foo" is not in the allowed list` | The adapter basename isn't in `allowed_adapters` | Add it to the `allowed_adapters` config array, or clear the array to disable the allow-list |
+| `Timed out after N seconds waiting for DAP response` | Program exited before hitting a breakpoint, or the breakpoint is on a line that doesn't execute | Verify the breakpoint is on an executable line; increase `dap_timeout_secs` if the program needs more time to reach it |
+| `No active debug session` | Calling inspect/step/continue tools without an active session | Call `debug_launch` or `debug_attach` first |
+| `A debug session is already active` | Calling `debug_launch`/`debug_attach` while a session is running | Call `debug_disconnect` to end the current session first |
+| `Failed to spawn adapter process` | The adapter binary isn't found or isn't executable | Verify the adapter is installed and on your `PATH`, or use an absolute path in `adapter_path` |
+| `Pagination token not found` / `expired` | Using a stale or invalid pagination token with `debug_get_page` | Re-run the original `debug_evaluate` call to get a fresh token; tokens expire after `pagination_cache_ttl_secs` (default 300s) |
 
 ## Architecture
 
